@@ -262,6 +262,17 @@ RHEL ships **Podman** instead of Docker, often with a `docker` command that's re
   alternatives are: a machine with Docker Desktop (Windows/macOS), a RHEL 9+ or Ubuntu VM, or a
   small cloud VM.
 
+**Still failing on cgroup v2?** These are the known rootless-Podman problems, from
+[kind's rootless guide](https://kind.sigs.k8s.io/docs/user/rootless/):
+
+| kind error contains | Fix |
+|---|---|
+| `requires setting systemd property "Delegate=yes"` | Set up delegation (rootless section above). **Then log out of *every* session, or reboot.** Your user's systemd instance keeps the old settings while any session (SSH, VS Code remote, a second terminal login) is open, so closing one terminal isn't enough. `cluster-up` also starts kind with `systemd-run --scope --user -p Delegate=yes`, which kind's docs recommend for rootless Podman |
+| `could not find a log line that matches "Reached target ...` | Rootless Podman's log relay misses the node's boot message. Switch the log driver: `mkdir -p ~/.config/containers && printf '[containers]\nlog_driver = "k8s-file"\n' >> ~/.config/containers/containers.conf`, then re-run `cluster-up` |
+| Pods failing with "too many open files" | Raise inotify limits: create `/etc/sysctl.d/99-kind.conf` with `fs.inotify.max_user_watches = 524288` and `fs.inotify.max_user_instances = 512`, then `sudo sysctl --system` |
+
+`cluster-up` recognises the first two errors and prints the matching fix.
+
 The course is tested with Docker. kind's Podman support is labelled *experimental* by kind itself,
 so if something behaves differently under Podman, tell whoever maintains this repo.
 

@@ -36,7 +36,35 @@ if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
   echo "Cluster '$CLUSTER_NAME' already exists - reusing it."
   kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
 else
-  kind create cluster --config "$KIND_CONFIG"
+  # Rootless Podman: kind's docs say some distros (RHEL among them) need kind started in its
+  # own systemd scope with cgroup delegation, or it fails with 'requires setting systemd
+  # property "Delegate=yes"'. https://kind.sigs.k8s.io/docs/user/rootless/
+  CREATE=(kind create cluster --config "$KIND_CONFIG")
+  if [ "${KIND_EXPERIMENTAL_PROVIDER:-}" = "podman" ] \
+     && [ "$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ] \
+     && command -v systemd-run >/dev/null 2>&1; then
+    echo "Rootless Podman detected: starting kind in its own systemd scope (Delegate=yes)."
+    CREATE=(systemd-run --scope --user -p "Delegate=yes" "${CREATE[@]}")
+  fi
+  LOG=$(mktemp)
+  if ! "${CREATE[@]}" 2>&1 | tee "$LOG"; then
+    echo
+    if grep -q "could not find a log line" "$LOG"; then
+      warn "Known rootless-Podman issue: kind can't see the node's boot log. Fix, then re-run:"
+      warn "  mkdir -p ~/.config/containers"
+      warn "  printf '[containers]\\nlog_driver = \"k8s-file\"\\n' >> ~/.config/containers/containers.conf"
+    elif grep -q 'Delegate=yes' "$LOG"; then
+      warn "cgroup delegation still isn't active for your user. Run ./scripts/check-prereqs.sh;"
+      warn "after changing delegate.conf you must FULLY log out (every session - including VS Code"
+      warn "remote/terminal sessions) or reboot. Check with: loginctl user-status \$USER"
+    elif grep -q 'cgroup v2' "$LOG"; then
+      warn "kind still sees cgroup v1. Check: stat -fc %T /sys/fs/cgroup  (must print cgroup2fs)"
+    fi
+    kind delete cluster --name "$CLUSTER_NAME" >/dev/null 2>&1 || true
+    rm -f "$LOG"
+    die "kind could not create the cluster (full output above)."
+  fi
+  rm -f "$LOG"
 fi
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
