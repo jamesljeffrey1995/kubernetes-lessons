@@ -11,6 +11,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\scripts\cluster-up.ps1
 # Options:
 #   $env:KIND_CONFIG = "path\to\other-kind-config.yaml"; .\scripts\cluster-up.ps1
+#   $env:SKIP_HOST_CHECKS = "1"   (skip the pre-flight checks - not recommended)
 
 # Note: no $ErrorActionPreference = "Stop" on purpose. In Windows PowerShell 5.1 it turns
 # harmless stderr output from kubectl/kind into script-killing errors. Invoke-Native checks
@@ -32,14 +33,13 @@ function Invoke-Native {
     if ($LASTEXITCODE -ne 0) { Die "'$exe $($rest -join ' ')' failed with exit code $LASTEXITCODE" }
 }
 
-Step "Checking tools"
-foreach ($tool in "docker", "kind", "kubectl") {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        Die "'$tool' not found. See lessons/00-setup/README.md"
-    }
+Step "Checking this machine (tools, Docker, cgroups, rootless mode)"
+if ($env:SKIP_HOST_CHECKS -eq "1") {
+    Warn "SKIP_HOST_CHECKS=1 - skipping host checks"
+} else {
+    & (Join-Path $PSScriptRoot "check-prereqs.ps1") -ForCluster
+    if ($LASTEXITCODE -ne 0) { Die "This machine isn't ready yet - see the FAIL items above." }
 }
-docker info *> $null
-if ($LASTEXITCODE -ne 0) { Die "Docker is installed but not running. Start Docker Desktop and retry." }
 
 Step "Creating kind cluster '$ClusterName' (first time takes 1-3 minutes)"
 $existing = @(kind get clusters 2>$null)

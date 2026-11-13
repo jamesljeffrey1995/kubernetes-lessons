@@ -8,6 +8,7 @@
 #
 # Usage:   ./scripts/cluster-up.sh
 # Options: KIND_CONFIG=path/to/other-kind-config.yaml ./scripts/cluster-up.sh
+#          SKIP_HOST_CHECKS=1 ./scripts/cluster-up.sh   (skip the pre-flight checks - not recommended)
 set -euo pipefail
 
 CLUSTER_NAME="lessons"
@@ -18,11 +19,12 @@ step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mWARNING: %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-step "Checking tools"
-for tool in docker kind kubectl; do
-  command -v "$tool" >/dev/null 2>&1 || die "'$tool' not found. See lessons/00-setup/README.md"
-done
-docker info >/dev/null 2>&1 || die "Docker is installed but not running (or you lack permission). Start Docker and retry."
+step "Checking this machine (tools, Docker, cgroups, rootless mode)"
+if [ "${SKIP_HOST_CHECKS:-}" = "1" ]; then
+  warn "SKIP_HOST_CHECKS=1 - skipping host checks"
+else
+  "$ROOT/scripts/check-prereqs.sh" --for-cluster || die "This machine isn't ready yet - see the ✘ items above."
+fi
 
 step "Creating kind cluster '$CLUSTER_NAME' (first time takes 1-3 minutes)"
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
