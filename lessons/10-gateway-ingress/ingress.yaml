@@ -1,0 +1,19 @@
+# The OLDER way: an Ingress. Same idea as an HTTPRoute, fewer features (no weights or header
+# matching without controller-specific annotations). You'll still see these everywhere.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: legacy
+spec:
+  ingressClassName: traefik    # which controller handles it
+  rules:
+    - host: legacy.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: green
+                port:
+                  number: 80

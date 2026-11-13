@@ -1,0 +1,196 @@
+# Traefik v3.7 as the cluster's front door (Gateway API + classic Ingress).
+#
+# Why Traefik and not ingress-nginx? The Kubernetes project retired ingress-nginx in
+# March 2026 (no more fixes or security patches). The recommended path is Gateway API.
+# Traefik implements both Gateway API and the older Ingress API, so you can learn both.
+#
+# How traffic gets in on kind:
+#   your browser -> localhost:8080 -> (kind port mapping) -> control-plane node :80
+#   -> hostPort 80 on this Traefik pod -> Traefik container :8000 -> your Service -> Pods
+#
+# RBAC rules are taken from Traefik's own docs (kubernetes-gateway-rbac.yml and the
+# Ingress provider rules), for Traefik v3.7.18.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik
+  namespace: traefik
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traefik
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["services", "secrets", "configmaps", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses/status"]
+    verbs: ["update"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources:
+      - gatewayclasses
+      - gateways
+      - httproutes
+      - grpcroutes
+      - tcproutes
+      - tlsroutes
+      - referencegrants
+      - backendtlspolicies
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources:
+      - gatewayclasses/status
+      - gateways/status
+      - httproutes/status
+      - grpcroutes/status
+      - tcproutes/status
+      - tlsroutes/status
+      - referencegrants/status
+      - backendtlspolicies/status
+    verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traefik
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: traefik
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: traefik
+spec:
+  controller: traefik.io/ingress-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+  namespace: traefik
+  labels:
+    app: traefik
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traefik
+  template:
+    metadata:
+      labels:
+        app: traefik
+    spec:
+      serviceAccountName: traefik
+      # Run on the control-plane node, because that's the node kind forwards :8080 to.
+      nodeSelector:
+        ingress-ready: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: traefik
+          image: traefik:v3.7.18
+          args:
+            - --entryPoints.web.address=:8000
+            - --entryPoints.traefik.address=:9000
+            - --ping=true
+            - --api.dashboard=true
+            - --api.insecure=true # dashboard on :9000, reachable only via kubectl port-forward
+            - --providers.kubernetesgateway=true
+            - --providers.kubernetesingress=true
+            - --providers.kubernetesingress.ingressclass=traefik
+            - --log.level=INFO
+            - --accesslog=true
+          ports:
+            - name: web
+              containerPort: 8000
+              hostPort: 80
+            - name: dashboard
+              containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 9000
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 9000
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  selector:
+    app: traefik
+  ports:
+    - name: web
+      port: 80
+      targetPort: web
+    - name: dashboard
+      port: 9000
+      targetPort: dashboard
+---
+# The GatewayClass says "Gateways of class 'traefik' are handled by Traefik".
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: traefik
+spec:
+  controllerName: traefik.io/gateway-controller
+---
+# One shared Gateway for the whole cluster. App teams attach HTTPRoutes to it from
+# any namespace (allowedRoutes.namespaces.from: All). Listener port 8000 must match
+# Traefik's "web" entryPoint port above.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main
+  namespace: traefik
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 8000
+      allowedRoutes:
+        namespaces:
+          from: All

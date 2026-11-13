@@ -1,0 +1,48 @@
+# A PersistentVolumeClaim is a REQUEST for storage: "I need 1Gi I can read and write".
+# The cluster's StorageClass turns that request into an actual disk (a PersistentVolume).
+#   kind:  "standard" class = a directory on the node (local-path-provisioner)
+#   AKS/EKS/GKE: the default class creates a real cloud disk (Azure Disk / EBS / PD)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notes-data
+spec:
+  accessModes:
+    - ReadWriteOnce          # mountable read-write by ONE node at a time
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: standard   # omit to use the cluster's default StorageClass
+---
+# A Deployment that appends a line to a file on the persistent disk every 5 seconds.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate           # stop the old Pod BEFORE starting the new one: an RWO disk can't be shared
+  selector:
+    matchLabels:
+      app: notes
+  template:
+    metadata:
+      labels:
+        app: notes
+    spec:
+      containers:
+        - name: writer
+          image: busybox:1.37
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "--- $(hostname) started at $(date)" >> /data/notes.txt
+              while true; do echo "$(date) written by $(hostname)" >> /data/notes.txt; sleep 5; done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: notes-data

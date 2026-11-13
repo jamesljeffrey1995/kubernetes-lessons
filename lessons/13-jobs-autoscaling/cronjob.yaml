@@ -1,0 +1,21 @@
+# A CronJob creates a Job on a schedule (standard cron syntax, UTC unless timeZone is set).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: report
+spec:
+  schedule: "*/1 * * * *"          # every minute (for the demo). "0 2 * * *" = 02:00 daily
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid        # skip a run if the previous one is still going
+  successfulJobsHistoryLimit: 3    # keep the last 3 finished Jobs for inspection
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: report
+              image: busybox:1.37
+              command: ["sh", "-c", "echo \"Nightly report generated at $(date)\""]

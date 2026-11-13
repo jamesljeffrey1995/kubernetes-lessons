@@ -1,0 +1,62 @@
+# Shows the four common ways to feed config into a container.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-demo
+  template:
+    metadata:
+      labels:
+        app: config-demo
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.29-alpine
+          ports:
+            - containerPort: 80
+          # (1) ALL keys of a ConfigMap as env vars
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            # (2) one specific key as an env var, renamed
+            - name: APP_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: LOG_LEVEL
+            # (3) one Secret key as an env var
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_PASSWORD
+            # Plain value, plus the "Downward API": facts about the Pod itself
+            - name: ENVIRONMENT
+              value: "lessons"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            # (4a) a ConfigMap key as a file. Updates to the ConfigMap appear in the file
+            #      after ~1 minute WITHOUT a restart.
+            - name: html
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+            # (4b) every Secret key as a file (preferred over env vars for secrets: env vars
+            #      leak into crash dumps, child processes and 'docker inspect'-style tooling)
+            - name: secrets
+              mountPath: /etc/app-secrets
+              readOnly: true
+      volumes:
+        - name: html
+          configMap:
+            name: web-content       # every key becomes a file named after the key
+        - name: secrets
+          secret:
+            secretName: app-secret

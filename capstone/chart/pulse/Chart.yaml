@@ -1,0 +1,9 @@
+apiVersion: v2
+name: pulse
+description: >-
+  Pulse - a demo web app with a live dashboard of which Pod, version and node served each
+  request, backed by Redis. Built to demonstrate Kubernetes features.
+type: application
+version: 1.0.0
+appVersion: "v1"
+keywords: [demo, kubernetes, gateway-api]

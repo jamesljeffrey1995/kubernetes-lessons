@@ -1,0 +1,19 @@
+# Burns as much CPU as it is allowed, with a CPU LIMIT of 200m (0.2 cores).
+# 'kubectl top pod cpu-hog' shows it pinned at ~200m: the kernel throttles it, it is NOT killed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cpu-hog
+spec:
+  containers:
+    - name: stress
+      image: polinux/stress:1.0.4
+      command: ["stress"]
+      args: ["--cpu", "1"]
+      resources:
+        requests:
+          cpu: 100m
+          memory: 16Mi
+        limits:
+          cpu: 200m
+          memory: 64Mi

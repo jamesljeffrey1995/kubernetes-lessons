@@ -1,0 +1,5 @@
+# Settings for the "dev" environment
+replicaCount: 1
+greetingName: "hello-DEV"
+route:
+  hostname: hello-dev.localhost

@@ -1,0 +1,33 @@
+# Ticket #7: "emails is stuck in some config error state."
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: emails-config
+  namespace: broken
+data:
+  SMTP_HOST: "smtp.example.com"
+  SMTP_PORT: "587"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emails
+  namespace: broken
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: emails }
+  template:
+    metadata:
+      labels: { app: emails }
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.37
+          command: ["sh", "-c", "echo sending via $SMTP_SERVER; sleep infinity"]
+          env:
+            - name: SMTP_SERVER
+              valueFrom:
+                configMapKeyRef:
+                  name: emails-config
+                  key: SMTP_SERVER

@@ -1,0 +1,17 @@
+# A long-running Pod with curl, nslookup and wget, so you can test things from INSIDE the
+# cluster. The same commands then work on Windows and Linux:
+#   kubectl apply -f lessons/tools/toolbox.yaml
+#   kubectl exec toolbox -- curl -s http://some-service
+#   kubectl exec -it toolbox -- sh        (interactive shell; 'exit' to leave)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: toolbox
+  labels:
+    app: toolbox
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: toolbox
+      image: curlimages/curl:8.17.0
+      command: ["sleep", "infinity"]

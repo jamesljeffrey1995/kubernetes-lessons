@@ -1,0 +1,31 @@
+# Run with: helm test <release> -n <namespace>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "pulse.fullname" . }}-test
+  labels:
+    {{- include "pulse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation   # keep the Pod so you can read its logs
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    {{- include "pulse.podSecurityContext" . | nindent 4 }}
+    runAsUser: 100
+  containers:
+    - name: test
+      image: {{ .Values.tests.image }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          base="http://{{ include "pulse.fullname" . }}:{{ .Values.service.port }}"
+          echo "readyz: $(curl -fsS $base/readyz)"
+          info=$(curl -fsS $base/api/info)
+          echo "info: $info"
+          echo "$info" | grep -q '"redis":"ok"' || { echo "Redis not reachable from the app"; exit 1; }
+          echo "PASS"
+      securityContext:
+        {{- include "pulse.containerSecurityContext" . | nindent 8 }}

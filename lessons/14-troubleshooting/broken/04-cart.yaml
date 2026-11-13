@@ -1,0 +1,30 @@
+# Ticket #4: "The cart Pods are all Running and healthy, but other services can't reach http://cart.broken"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: broken
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: cart-service }
+  template:
+    metadata:
+      labels: { app: cart-service }
+    spec:
+      containers:
+        - name: web
+          image: traefik/whoami:v1.11.0
+          ports: [{ name: http, containerPort: 80 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart
+  namespace: broken
+spec:
+  selector:
+    app: cart
+  ports:
+    - port: 80
+      targetPort: http

@@ -1,0 +1,25 @@
+# Init containers run to completion, one after another, BEFORE the main containers start.
+# Typical uses: wait for a database, run a migration, download config, fix file permissions.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-with-init
+  labels:
+    app: web-with-init
+spec:
+  volumes:
+    - name: html
+      emptyDir: {}
+  initContainers:
+    - name: prepare
+      image: busybox:1.37
+      command: ["sh", "-c", "echo 'Prepared by an init container' > /html/index.html; sleep 5"]
+      volumeMounts:
+        - name: html
+          mountPath: /html
+  containers:
+    - name: nginx
+      image: nginx:1.29-alpine
+      volumeMounts:
+        - name: html
+          mountPath: /usr/share/nginx/html

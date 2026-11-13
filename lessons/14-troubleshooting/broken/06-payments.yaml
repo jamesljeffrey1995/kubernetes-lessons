@@ -1,0 +1,24 @@
+# Ticket #6: "We released payments v2. The rollout has been 'in progress' for ages,
+#             and the new Pods say 0/1 READY."
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  namespace: broken
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: payments }
+  template:
+    metadata:
+      labels: { app: payments }
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.29-alpine
+          ports: [{ name: http, containerPort: 80 }]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3

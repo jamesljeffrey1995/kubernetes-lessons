@@ -1,0 +1,27 @@
+# Default values. Override with -f my-values.yaml or --set key=value.
+replicaCount: 2
+
+image:
+  repository: traefik/whoami
+  tag: ""               # empty = use the chart's appVersion
+  pullPolicy: IfNotPresent
+
+# Extra name shown in every response (whoami's WHOAMI_NAME env var)
+greetingName: "hello-chart"
+
+service:
+  port: 80
+
+route:
+  enabled: true
+  hostname: hello.localhost
+  gateway:
+    name: main
+    namespace: traefik
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    memory: 64Mi

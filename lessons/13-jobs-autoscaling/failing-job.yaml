@@ -1,0 +1,14 @@
+# A Job whose work always fails. Watch Kubernetes retry it (with back-off) and then give up.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: always-fails
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: worker
+          image: busybox:1.37
+          command: ["sh", "-c", "echo 'Connecting to database...'; sleep 1; echo 'ERROR: connection refused' >&2; exit 1"]

@@ -1,0 +1,8 @@
+{{ .Chart.Name }} is installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+{{- if .Values.route.enabled }}
+
+Open: http://{{ .Values.route.hostname }}:8080
+{{- else }}
+
+No route enabled. Try: kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "hello.fullname" . }} 8081:{{ .Values.service.port }}
+{{- end }}

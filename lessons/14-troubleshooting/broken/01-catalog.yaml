@@ -1,0 +1,18 @@
+# Ticket #1: "The catalog service never starts."
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: broken
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: catalog }
+  template:
+    metadata:
+      labels: { app: catalog }
+    spec:
+      containers:
+        - name: web
+          image: ngnix:1.29-alpine
+          ports: [{ containerPort: 80 }]

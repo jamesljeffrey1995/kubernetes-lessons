@@ -1,0 +1,38 @@
+# A Deployment (3 Pods) plus a Service that gives them one stable name and IP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: whoami
+  template:
+    metadata:
+      labels:
+        app: whoami
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.11.0
+          ports:
+            - name: http             # naming ports lets Services refer to them by name
+              containerPort: 80
+---
+# ClusterIP Service (the default type): reachable only from inside the cluster, at
+#   http://whoami                         (from the same namespace)
+#   http://whoami.default                 (from any namespace)
+#   http://whoami.default.svc.cluster.local  (fully qualified)
+apiVersion: v1
+kind: Service
+metadata:
+  name: whoami
+spec:
+  type: ClusterIP
+  selector:
+    app: whoami                # send traffic to every READY Pod with this label
+  ports:
+    - name: http
+      port: 80                 # the port clients connect to on the Service
+      targetPort: http         # the container port (by name or number) traffic is sent to

@@ -1,0 +1,26 @@
+# Two test clients in the default namespace. Identical, except for one label.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frontend
+  labels:
+    role: frontend
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: curl
+      image: curlimages/curl:8.17.0
+      command: ["sleep", "infinity"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: intruder
+  labels:
+    role: something-else
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: curl
+      image: curlimages/curl:8.17.0
+      command: ["sleep", "infinity"]

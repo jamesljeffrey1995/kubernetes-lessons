@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# Protects against VOLUNTARY disruptions (node drains during upgrades, autoscaler
+# removing nodes): Kubernetes will wait rather than evict below minAvailable.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pulse.fullname" . }}
+  labels:
+    {{- include "pulse.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "pulse.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,37 @@
+# ConfigMap: non-sensitive configuration, as key/value pairs and/or whole files.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  # simple key/value pairs -> typically become environment variables
+  GREETING: "Hello from a ConfigMap"
+  LOG_LEVEL: "info"
+---
+# A second ConfigMap holding a whole file, to be mounted into the container's filesystem.
+# Keeping files and env-style settings in separate ConfigMaps stops 'envFrom' (which imports
+# EVERY key) from turning a whole HTML file into an environment variable.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-content
+data:
+  index.html: |
+    <html>
+      <body style="font-family: sans-serif; background: #e8f0fe">
+        <h1>This page lives in a ConfigMap</h1>
+        <p>Edit config.yaml, re-apply, and refresh in about a minute.</p>
+      </body>
+    </html>
+---
+# Secret: sensitive values. 'stringData' lets you write plain text; Kubernetes stores it
+# base64-encoded under 'data'. Base64 is ENCODING, NOT ENCRYPTION: anyone who can read the
+# Secret can read the value. Never commit real secrets to Git like this (see the README).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+type: Opaque
+stringData:
+  DB_USER: "app"
+  DB_PASSWORD: "s3cr3t-for-lessons-only"

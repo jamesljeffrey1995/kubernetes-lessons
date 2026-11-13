@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --line: #334155; --text: #e2e8f0; --muted: #94a3b8;
+    --ok: #22c55e; --bad: #ef4444; --accent: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+           padding: 18px 24px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+  header .msg { color: var(--muted); }
+  header .right { margin-left: auto; color: var(--muted); font-size: 13px; }
+  main { padding: 20px 24px; display: grid; gap: 18px;
+         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); max-width: 1400px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .served { grid-column: 1 / -1; display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
+            transition: background-color .3s; }
+  .served .big { font: 600 28px/1.2 ui-monospace, "Cascadia Code", Consolas, monospace; word-break: break-all; }
+  .served .ver { font-size: 44px; font-weight: 800; transition: color .3s; }
+  .kv { color: var(--muted); font-size: 13px; }
+  .kv b { color: var(--text); font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .stat .n { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .8px; }
+  .bad .n { color: var(--bad); }
+  .good .n { color: var(--ok); }
+  .pods { grid-column: 1 / -1; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .pod { border-radius: 10px; padding: 12px 14px; color: #fff; position: relative;
+         box-shadow: inset 0 0 0 1px rgba(255,255,255,.15); transition: transform .15s; }
+  .pod .name { font: 600 13px ui-monospace, Consolas, monospace; word-break: break-all; }
+  .pod .meta { font-size: 12px; opacity: .9; margin-top: 4px; }
+  .pod .hits { position: absolute; top: 10px; right: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pod.flash { transform: scale(1.04); box-shadow: 0 0 0 3px #fff; }
+  .bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; background: var(--line); }
+  .bar div { display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+             color: #fff; transition: width .4s; white-space: nowrap; overflow: hidden; }
+  .legend { margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .log { font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--muted); max-height: 160px; overflow: auto; }
+  .log .err { color: var(--bad); }
+  button { background: var(--line); color: var(--text); border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  button:hover { background: #475569; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ Pulse</h1>
+  <span class="msg" id="message">connecting…</span>
+  <span class="right">namespace <b id="ns">?</b> · Redis <b id="redis">?</b> ·
+    <button id="pause">Pause</button></span>
+</header>
+
+<main>
+  <section class="panel served" id="servedPanel">
+    <div>
+      <div class="kv">This request was served by</div>
+      <div class="big" id="podName">…</div>
+      <div class="kv">on node <b id="nodeName">…</b></div>
+    </div>
+    <div class="ver" id="version">…</div>
+  </section>
+
+  <section class="panel">
+    <h2>Requests from this browser</h2>
+    <div class="stats">
+      <div class="stat good"><div class="n" id="ok">0</div><div class="l">succeeded</div></div>
+      <div class="stat" id="failBox"><div class="n" id="failed">0</div><div class="l">failed</div></div>
+      <div class="stat"><div class="n" id="total">0</div><div class="l">total hits (all users, in Redis)</div></div>
+      <div class="stat"><div class="n" id="latency">–</div><div class="l">latency (ms)</div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Versions in the last 50 responses</h2>
+    <div class="bar" id="versionBar"></div>
+    <div class="legend" id="versionLegend"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Event log</h2>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="panel pods">
+    <h2>Pods that served traffic in the last few seconds (<span id="podCount">0</span>)</h2>
+    <div class="grid" id="pods"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const INTERVAL_MS = 300;
+let ok = 0, failed = 0, paused = false;
+const recent = [];               // last 50 {version, color}
+const knownPods = new Set();
+let lastVersion = null;
+
+function log(text, isError) {
+  const line = document.createElement("div");
+  if (isError) line.className = "err";
+  line.textContent = new Date().toLocaleTimeString() + "  " + text;
+  $("log").prepend(line);
+  while ($("log").children.length > 60) $("log").lastChild.remove();
+}
+
+function renderVersions() {
+  const counts = {};
+  for (const r of recent) {
+    counts[r.version] = counts[r.version] || { n: 0, color: r.color };
+    counts[r.version].n++;
+  }
+  const bar = $("versionBar"), legend = $("versionLegend");
+  bar.innerHTML = ""; legend.innerHTML = "";
+  for (const [v, c] of Object.entries(counts).sort()) {
+    const pct = Math.round(100 * c.n / recent.length);
+    const seg = document.createElement("div");
+    seg.style.width = pct + "%"; seg.style.background = c.color; seg.textContent = pct >= 12 ? v : "";
+    bar.appendChild(seg);
+    const item = document.createElement("span");
+    const dot = document.createElement("span");
+    dot.className = "dot"; dot.style.background = c.color;
+    item.append(dot, `${v}: ${pct}%   `);
+    legend.appendChild(item);
+  }
+}
+
+function renderPods(pods, servedBy) {
+  const grid = $("pods");
+  grid.innerHTML = "";
+  const now = new Set();
+  for (const p of pods) {
+    now.add(p.name);
+    if (!knownPods.has(p.name)) log(`new Pod serving: ${p.name} (${p.version})`);
+    const el = document.createElement("div");
+    el.className = "pod" + (p.name === servedBy ? " flash" : "");
+    el.style.background = p.color;
+    el.innerHTML = `<div class="hits"></div><div class="name"></div><div class="meta"></div>`;
+    el.querySelector(".hits").textContent = p.hits;
+    el.querySelector(".name").textContent = p.name;
+    el.querySelector(".meta").textContent = `${p.version} · ${p.node}`;
+    grid.appendChild(el);
+  }
+  for (const name of knownPods) if (!now.has(name)) log(`Pod stopped serving: ${name}`);
+  knownPods.clear(); now.forEach((n) => knownPods.add(n));
+  $("podCount").textContent = pods.length;
+}
+
+async function tick() {
+  if (paused) return;
+  const started = performance.now();
+  try {
+    const res = await fetch("/api/info", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const d = await res.json();
+    ok++;
+    $("latency").textContent = Math.round(performance.now() - started);
+    $("message").textContent = d.message;
+    $("ns").textContent = d.namespace;
+    $("redis").textContent = d.redis === "ok" ? "ok" : "unavailable";
+    $("redis").style.color = d.redis === "ok" ? "var(--ok)" : "var(--bad)";
+    $("podName").textContent = d.servedBy.name;
+    $("nodeName").textContent = d.servedBy.node;
+    $("version").textContent = d.servedBy.version;
+    $("version").style.color = d.servedBy.color;
+    $("servedPanel").style.backgroundColor = `color-mix(in srgb, ${d.servedBy.color} 18%, var(--panel))`;
+    $("total").textContent = d.totalHits >= 0 ? d.totalHits.toLocaleString() : "–";
+    if (lastVersion && lastVersion !== d.servedBy.version) log(`now seeing version ${d.servedBy.version}`);
+    lastVersion = d.servedBy.version;
+    recent.push({ version: d.servedBy.version, color: d.servedBy.color });
+    if (recent.length > 50) recent.shift();
+    renderVersions();
+    renderPods(d.pods, d.servedBy.name);
+  } catch (e) {
+    failed++;
+    log("request failed: " + e.message, true);
+  }
+  $("ok").textContent = ok.toLocaleString();
+  $("failed").textContent = failed.toLocaleString();
+  $("failBox").className = "stat " + (failed > 0 ? "bad" : "good");
+}
+
+$("pause").onclick = () => { paused = !paused; $("pause").textContent = paused ? "Resume" : "Pause"; };
+setInterval(tick, INTERVAL_MS);
+tick();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Asks for more memory than team-a's LimitRange allows for a single container (512Mi).
+# Applying this should be REJECTED by the API server.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: too-big
+  namespace: team-a
+spec:
+  containers:
+    - name: nginx
+      image: nginx:1.29-alpine
+      resources:
+        limits:
+          memory: 1Gi
