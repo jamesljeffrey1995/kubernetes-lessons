@@ -125,8 +125,8 @@ Start the load ([`load.yaml`](load.yaml): 4 Pods requesting in a tight loop):
 kubectl apply -f lessons/13-jobs-autoscaling/load.yaml
 ```
 
-Within 1-2 minutes CPU shoots past the target and `REPLICAS` climbs (often straight to the
-maximum of 8). See the HPA's reasoning:
+Within 1-2 minutes CPU shoots past the target and `REPLICAS` climbs (how far depends on your
+machine's CPU). See the HPA's reasoning:
 
 ```bash
 kubectl describe hpa cpu-app

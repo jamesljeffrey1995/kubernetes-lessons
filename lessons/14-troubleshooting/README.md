@@ -251,4 +251,4 @@ and your Git log are the first places to look.
 
 ---
 
-**Next:** [Lesson 15: Capstone project](../15-capstone/README.md)
+**Next:** [Lesson 15: Capstone project](../../capstone/README.md)

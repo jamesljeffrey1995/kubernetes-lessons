@@ -1,0 +1,155 @@
+name: CI
+
+# Proves the course actually works: lints everything, then creates a real kind cluster with the
+# course's own scripts and runs every lesson and the capstone demo against it - once with the
+# bash scripts + Helm 3, once with the PowerShell scripts + Helm 4.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KIND_VERSION: v0.33.0
+  KUBECTL_VERSION: v1.37.2
+
+jobs:
+  static:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: capstone/app/go.mod
+
+      - name: Go format, vet, test
+        working-directory: capstone/app
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "Run gofmt"; exit 1; }
+          go vet ./...
+          go test ./...
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.22.1
+
+      - name: Helm lint
+        run: |
+          helm lint lessons/11-helm/hello
+          helm lint capstone/chart/pulse
+          helm lint capstone/chart/pulse -f capstone/values-v2.yaml -f capstone/values-autoscale.yaml
+
+      - name: ShellCheck
+        run: shellcheck scripts/*.sh capstone/scripts/*.sh tests/*.sh
+
+      - name: PowerShell 7 parse check
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { Write-Host "$($_.FullName)"; $errors | Format-List; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+
+  windows-powershell:
+    name: Windows PowerShell 5.1 parse check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every .ps1 with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { Write-Host "$($_.FullName)"; $errors | Format-List; $failed = $true }
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            if ($bytes | Where-Object { $_ -gt 127 }) { Write-Host "Non-ASCII characters in $($_.FullName) (breaks PS 5.1)"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+
+  e2e:
+    name: End-to-end (${{ matrix.shell }} scripts, Helm ${{ matrix.helm }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shell: bash
+            helm: v3.22.1
+          - shell: pwsh
+            helm: v4.2.4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ matrix.helm }}
+
+      - name: Install kind and kubectl
+        run: |
+          curl -fsSLo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kind kubectl /usr/local/bin/
+          kind version; kubectl version --client; helm version
+
+      - name: Check prerequisites
+        run: |
+          if [ "${{ matrix.shell }}" = "bash" ]; then ./scripts/check-prereqs.sh
+          else pwsh -NoProfile -File scripts/check-prereqs.ps1; fi
+
+      - name: Create cluster (scripts/cluster-up)
+        run: |
+          if [ "${{ matrix.shell }}" = "bash" ]; then ./scripts/cluster-up.sh
+          else pwsh -NoProfile -File scripts/cluster-up.ps1; fi
+          kubectl -n kube-system rollout status deploy/metrics-server --timeout=180s
+          for i in $(seq 1 30); do kubectl top nodes && break; sleep 5; done
+
+      - name: Lessons 03-14
+        if: matrix.shell == 'bash'
+        run: ./tests/lessons-test.sh
+
+      - name: Capstone - build and deploy
+        run: |
+          if [ "${{ matrix.shell }}" = "bash" ]; then
+            ./capstone/scripts/build.sh && ./capstone/scripts/deploy.sh
+          else
+            pwsh -NoProfile -File capstone/scripts/build.ps1
+            pwsh -NoProfile -File capstone/scripts/deploy.ps1
+          fi
+
+      - name: Capstone - zero-downtime proof
+        if: matrix.shell == 'bash'
+        run: ./tests/zero-downtime.sh
+
+      - name: Capstone - full demo (auto mode, NetworkPolicy enforcement required)
+        env:
+          STRICT_NETPOL: "1"
+        run: |
+          if [ "${{ matrix.shell }}" = "bash" ]; then ./capstone/scripts/demo.sh --auto
+          else pwsh -NoProfile -File capstone/scripts/demo.ps1 -Auto; fi
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl describe pods -n pulse || true
+          kubectl logs -n traefik deploy/traefik --tail=50 || true
+          kubectl -n kube-system logs ds/kindnet --tail=50 || true
