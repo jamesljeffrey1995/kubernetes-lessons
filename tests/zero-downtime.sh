@@ -36,7 +36,7 @@ measure() {
 }
 
 delete_one_pod() {
-  kubectl delete -n $NS "$(kubectl get pods -n $NS -l app.kubernetes.io/component=web -o name | head -n 1)"
+  kubectl delete -n $NS "$(kubectl get pods -n $NS -l app.kubernetes.io/component=web -o name | sed -n 1p)"
   kubectl rollout status deploy/pulse -n $NS --timeout=120s
 }
 
@@ -44,7 +44,7 @@ drain_worker() {
   local redis_node node
   redis_node=$(kubectl get pod pulse-redis-0 -n $NS -o jsonpath='{.spec.nodeName}')
   node=$(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[*].metadata.name}' \
-         | tr ' ' '\n' | grep -vx "$redis_node" | head -n 1)
+         | tr ' ' '\n' | grep -vx "$redis_node" | sed -n 1p)
   kubectl drain "$node" --ignore-daemonsets --delete-emptydir-data --force --timeout=180s
   kubectl rollout status deploy/pulse -n $NS --timeout=120s
   kubectl uncordon "$node"

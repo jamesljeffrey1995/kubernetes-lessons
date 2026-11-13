@@ -140,6 +140,18 @@ Run the checker from the root of this repo:
 You should see a ✔ next to each tool. Any version of kubectl within one minor version of the
 cluster (1.36-1.38 for the default kind v0.33 cluster, which runs Kubernetes 1.37) is fine.
 
+Besides the tools, the checker inspects **how Docker is set up**, because that's where most
+"kind create cluster failed" problems come from:
+
+| Check | Why it matters |
+|---|---|
+| **cgroup v2** | Kubernetes 1.37 refuses to start on cgroup v1 hosts. Old Linux distros, or an outdated WSL, can still be on v1 |
+| **Rootless Docker** | kind supports it, but only with extra host settings (below). Some corporate Linux machines run Docker rootless |
+| **Podman posing as `docker`** | kind must be told to use Podman explicitly |
+
+Every problem it finds comes with the exact command to fix it. `cluster-up` runs the same checks
+first and stops with that advice, instead of failing halfway through with a kind stack trace.
+
 ## Create the cluster
 
 **bash:**
@@ -188,6 +200,8 @@ These are real issues people hit on corporate laptops:
 | `kind create cluster` hangs or nodes stay `NotReady` | VPN client hijacking Docker's network range | Try off VPN once to confirm, then ask IT about split tunnelling for `172.16.0.0/12` |
 | `port is already allocated` on 8080 | Something else uses port 8080 | Change `hostPort: 8080` in `platform/kind-config.yaml` to e.g. `8081` and use that port wherever lessons say `8080` |
 | `toomanyrequests: You have reached your unauthenticated pull rate limit` | Docker Hub limits anonymous pulls per IP, and an office shares one IP | Wait (the limit resets within hours), `docker login` with a free Docker Hub account for pulls on your machine, or ask whether your company has a registry mirror. Pods show this as `ImagePullBackOff` |
+| `kind create cluster` fails with an error mentioning **rootless** | Docker runs in rootless mode without the host settings kind needs | Run `check-prereqs`: it says exactly what's missing. Details in "Rootless Docker" below |
+| kubelet fails with `cgroup v1 support is unsupported` | The host (or WSL) uses cgroup v1 | `check-prereqs` shows the fix: enable cgroup v2 on Linux, or `wsl --update` on Windows |
 | `Cannot connect to the Docker daemon` | Docker Desktop not started / Linux user not in `docker` group | Start Docker Desktop / log out and back in |
 | Script says `running scripts is disabled on this system` | PowerShell execution policy | See "Allow the course scripts to run" above |
 | `\r: command not found` running a `.sh` file | File got Windows line endings | This repo's `.gitattributes` prevents this; re-clone, or run `git config core.autocrlf input` and re-checkout |
@@ -197,6 +211,34 @@ companies. Larger companies (more than 250 employees *or* more than $10M annual 
 paid Docker subscription. If your company doesn't have one, **Rancher Desktop** (free, open source)
 works with this course: install it, choose the "dockerd (moby)" container engine in its settings,
 and disable its built-in Kubernetes.
+
+### Rootless Docker
+
+In rootless mode the Docker daemon runs as *your* user instead of root. It's more secure, and
+kind supports it, but the host needs three things. `./scripts/check-prereqs.sh` checks all
+three and prints the fix for whichever is missing:
+
+1. **cgroup v2.** `docker info` shows `Cgroup Version: 2`.
+2. **cgroup delegation** lets your user's services manage CPU and memory limits. It's on by
+   default with systemd 252 or newer (`systemctl --version`). On older systemd:
+   ```bash
+   sudo mkdir -p /etc/systemd/system/user@.service.d/
+   printf '[Service]\nDelegate=yes\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+   sudo systemctl daemon-reload
+   systemctl --user restart docker
+   ```
+3. **iptables kernel modules.** Without them, Services and the Traefik gateway don't route traffic:
+   ```bash
+   printf 'ip6_tables\nip6table_nat\nip_tables\niptable_nat\n' | sudo tee /etc/modules-load.d/iptables.conf
+   sudo systemctl restart systemd-modules-load.service
+   ```
+
+Then re-run `./scripts/check-prereqs.sh` and `./scripts/cluster-up.sh`.
+
+**On your own machine, normal ("rootful") Docker is simpler.** To switch back from rootless:
+`dockerd-rootless-setuptool.sh uninstall`, install Docker as in step 1 above, then
+`docker context use default`. On a work machine where rootless is the policy, use the steps above
+rather than fighting it. Source: [kind's rootless guide](https://kind.sigs.k8s.io/docs/user/rootless/).
 
 ### Corporate proxy: trusting a custom root CA inside kind nodes
 
