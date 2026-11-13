@@ -39,6 +39,10 @@ spec:
           ports:
             - name: redis
               containerPort: 6379
+          readinessProbe:              # Ready only once Redis actually answers (lesson 09 explains probes)
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 2
           volumeMounts:
             - name: data
               mountPath: /data

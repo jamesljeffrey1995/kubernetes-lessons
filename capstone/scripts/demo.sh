@@ -4,6 +4,7 @@
 #
 # Usage:  ./capstone/scripts/demo.sh            (pauses before each step - for presenting)
 #         ./capstone/scripts/demo.sh --auto     (no pauses, checks each step - used by CI)
+# Set STRICT_NETPOL=1 to fail if NetworkPolicies aren't enforced (CI does).
 # Set SKIP_AUTOSCALE=1 to skip the autoscaling step (e.g. if metrics-server isn't working).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -14,7 +15,7 @@ NS=pulse
 
 title() { printf '\n\033[1;35m━━━ %s ━━━\033[0m\n' "$*"; }
 say()   { printf '\033[0;36m%s\033[0m\n' "$*"; }
-run()   { printf '\033[1;33m$ %s\033[0m\n' "$*"; eval "$@"; }
+run()   { printf '\033[1;33m$ %s\033[0m\n' "$1"; eval "$1"; }   # takes ONE string (may contain > redirects)
 pause() { if ! $AUTO; then read -r -p "↵ Enter to continue..." _; fi; }
 fail()  { printf '\033[1;31mFAILED: %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -52,16 +53,25 @@ run "kubectl get pods -n $NS -l app.kubernetes.io/component=web -o wide"
 wait_for 60 "6 Pods ready" replicas_at_least 6
 pause
 
-title "2. Self-healing: delete EVERY app Pod"
-say "Watch the 'failed' counter on the dashboard: it should stay at 0."
+title "2. Self-healing"
+say "2a. Kill ONE Pod (a crash, or a node failure taking out one replica)."
+say "    Watch the 'failed' counter on the dashboard: it stays at 0, because the other Pods carry the traffic."
+VICTIM=$(kubectl get pods -n $NS -l app.kubernetes.io/component=web -o jsonpath='{.items[0].metadata.name}')
+run "kubectl delete pod $VICTIM -n $NS --wait=false"
+wait_for 120 "Deployment replaced the Pod" replicas_at_least 6
+pause
+say "2b. Now the worst case: kill EVERY app Pod at the same time."
+say "    Expect a few seconds of failed requests (nothing is Ready until replacements start),"
+say "    then full recovery without anyone touching anything."
 run "kubectl delete pods -n $NS -l app.kubernetes.io/component=web --wait=false"
 run "kubectl get pods -n $NS -l app.kubernetes.io/component=web"
 wait_for 120 "Deployment replaced all 6 Pods" replicas_at_least 6
 say "The hit counter kept counting: state lives in Redis (a StatefulSet with its own disk), not in the Pods."
+say "Real outages look like 2a far more often than 2b, and spreading replicas across nodes and zones keeps it that way."
 pause
 
 title "3. Zero-downtime rolling update: v1 (blue) → v2 (green)"
-say "Tiles turn green one by one. Still 0 failed requests."
+say "Tiles turn green one by one. Pods are replaced gradually, so: 0 failed requests."
 run "helm upgrade pulse chart/pulse -n $NS -f values-v2.yaml --wait --timeout 5m > /dev/null"
 wait_for 120 "all Pods on v2" all_pods_version v2
 run "helm history pulse -n $NS"
@@ -106,6 +116,8 @@ RESULT=$(kubectl logs netpol-test -n default 2>/dev/null | tail -n 1)
 kubectl delete pod netpol-test -n default --wait=false >/dev/null
 if [ "$RESULT" = "BLOCKED" ]; then
   say "✔ BLOCKED, as intended."
+elif [ "${STRICT_NETPOL:-}" = "1" ]; then
+  fail "NetworkPolicy not enforced (got '$RESULT')"
 else
   printf '\033[1;33m%s\033[0m\n' "⚠ Got '$RESULT'. Your network plugin may not enforce NetworkPolicies (see lesson 12)."
 fi

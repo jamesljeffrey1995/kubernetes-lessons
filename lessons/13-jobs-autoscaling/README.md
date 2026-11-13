@@ -163,8 +163,10 @@ down to 1. Scaling down slowly is deliberate: it avoids flapping when load is bu
 
 ```bash
 kubectl delete -f lessons/13-jobs-autoscaling/
-kubectl delete job report-manual
 ```
+
+(`report-manual` goes too: a Job created with `--from=cronjob/report` is *owned* by the CronJob,
+and Kubernetes' garbage collector deletes owned objects along with their owner.)
 
 ## Exercises
 
