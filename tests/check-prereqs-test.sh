@@ -16,8 +16,10 @@ cat > "$WORK/bin/docker" <<'EOF'
 case "$*" in
   "--version")                           echo "${FAKE_DOCKER_VERSION:-Docker version 29.0.0, build fake}" ;;
   "info")                                echo "fake info" ;;
-  "info --format {{.CgroupVersion}}")    echo "${FAKE_CGROUP:-2}" ;;
+  "info --format {{.CgroupVersion}}")    echo "${FAKE_CGROUP-2}" ;;
   "info --format {{.SecurityOptions}}")  echo "${FAKE_SECURITY:-[name=seccomp,profile=builtin]}" ;;
+  "info --format {{.Host.CgroupsVersion}}")   echo "${FAKE_PODMAN_CGROUP:-v2}" ;;
+  "info --format {{.Host.Security.Rootless}}") echo "${FAKE_PODMAN_ROOTLESS:-false}" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -34,6 +36,9 @@ echo "cpuset cpu io memory pids" > "$WORK/cg-good/user.slice/user-$U.slice/user@
 echo "memory pids" > "$WORK/cg-bad/user.slice/user-$U.slice/user@$U.service/cgroup.controllers"
 mkdir -p "$WORK/mods-good/ip_tables" "$WORK/mods-good/ip6_tables" "$WORK/mods-good/iptable_nat" "$WORK/mods-good/ip6table_nat" "$WORK/mods-none"
 : > "$WORK/proc-modules-empty"
+printf 'NAME="Red Hat Enterprise Linux"\nID="rhel"\nVERSION_ID="8.10"\n' > "$WORK/os-release-rhel8"
+printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n' > "$WORK/os-release-ubuntu"
+mkdir -p "$WORK/not-a-cgroup-fs"
 
 ROOTLESS='[name=seccomp,profile=builtin name=rootless name=cgroupns]'
 PASSED=0
@@ -64,8 +69,8 @@ scenario() {
 
 scenario "normal Docker, cgroup v2"           0 "All good" -- \
   CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-good"
-scenario "cgroup v1 fails"                    1 "cgroup v1" -- \
-  FAKE_CGROUP=1
+scenario "cgroup v1 fails"                    1 "update-grub" -- \
+  FAKE_CGROUP=1 OS_RELEASE="$WORK/os-release-ubuntu"
 scenario "rootless, everything set up"        0 "iptables kernel modules loaded" -- \
   FAKE_SECURITY="$ROOTLESS" CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-good" PROC_MODULES="$WORK/proc-modules-empty"
 scenario "rootless, no cgroup delegation"     1 "Delegate=yes" -- \
@@ -74,5 +79,13 @@ scenario "rootless, iptables modules missing" 1 "modules-load.d/iptables.conf" -
   FAKE_SECURITY="$ROOTLESS" CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-none" PROC_MODULES="$WORK/proc-modules-empty"
 scenario "Podman posing as docker"            0 "KIND_EXPERIMENTAL_PROVIDER" -- \
   FAKE_DOCKER_VERSION="podman version 5.4.0"
+scenario "RHEL 8 rootless Podman on cgroup v1" 1 "grubby --update-kernel=ALL" -- \
+  FAKE_DOCKER_VERSION="podman version 4.9.4-rhel" FAKE_PODMAN_CGROUP=v1 FAKE_PODMAN_ROOTLESS=true \
+  OS_RELEASE="$WORK/os-release-rhel8" CGROUP_ROOT="$WORK/cg-bad" SYS_MODULE_DIR="$WORK/mods-good"
+scenario "rootless Podman, cgroup v2, set up"  0 "iptables kernel modules loaded" -- \
+  FAKE_DOCKER_VERSION="podman version 4.9.4-rhel" FAKE_PODMAN_CGROUP=v2 FAKE_PODMAN_ROOTLESS=true \
+  KIND_EXPERIMENTAL_PROVIDER=podman CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-good" PROC_MODULES="$WORK/proc-modules-empty"
+scenario "cgroup version unknown is a failure" 1 "could not determine the cgroup version" -- \
+  FAKE_CGROUP= CGROUP_FS_ROOT="$WORK/not-a-cgroup-fs"
 
 echo "PASS: $PASSED scenario checks"

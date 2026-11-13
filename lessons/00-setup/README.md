@@ -201,6 +201,7 @@ These are real issues people hit on corporate laptops:
 | `port is already allocated` on 8080 | Something else uses port 8080 | Change `hostPort: 8080` in `platform/kind-config.yaml` to e.g. `8081` and use that port wherever lessons say `8080` |
 | `toomanyrequests: You have reached your unauthenticated pull rate limit` | Docker Hub limits anonymous pulls per IP, and an office shares one IP | Wait (the limit resets within hours), `docker login` with a free Docker Hub account for pulls on your machine, or ask whether your company has a registry mirror. Pods show this as `ImagePullBackOff` |
 | `kind create cluster` fails with an error mentioning **rootless** | Docker runs in rootless mode without the host settings kind needs | Run `check-prereqs`: it says exactly what's missing. Details in "Rootless Docker" below |
+| `running kind with rootless provider requires cgroup v2` | Rootless Docker/Podman on a cgroup v1 host (typically RHEL 8) | See "Red Hat (RHEL) machines with Podman" below |
 | kubelet fails with `cgroup v1 support is unsupported` | The host (or WSL) uses cgroup v1 | `check-prereqs` shows the fix: enable cgroup v2 on Linux, or `wsl --update` on Windows |
 | `Cannot connect to the Docker daemon` | Docker Desktop not started / Linux user not in `docker` group | Start Docker Desktop / log out and back in |
 | Script says `running scripts is disabled on this system` | PowerShell execution policy | See "Allow the course scripts to run" above |
@@ -239,6 +240,30 @@ Then re-run `./scripts/check-prereqs.sh` and `./scripts/cluster-up.sh`.
 `dockerd-rootless-setuptool.sh uninstall`, install Docker as in step 1 above, then
 `docker context use default`. On a work machine where rootless is the policy, use the steps above
 rather than fighting it. Source: [kind's rootless guide](https://kind.sigs.k8s.io/docs/user/rootless/).
+
+### Red Hat (RHEL) machines with Podman
+
+RHEL ships **Podman** instead of Docker, often with a `docker` command that's really Podman
+(`docker --version` prints `podman version ...`). It runs **rootless** by default. kind can use it:
+
+- `cluster-up` and the capstone `build` script set `KIND_EXPERIMENTAL_PROVIDER=podman` for you
+  when they detect Podman. Set it yourself (`export KIND_EXPERIMENTAL_PROVIDER=podman`) if you run `kind` by hand.
+- **RHEL 8 (and Rocky/Alma/CentOS 8) default to cgroup v1**, and kind refuses rootless mode on
+  cgroup v1 (`running kind with rootless provider requires cgroup v2`). RHEL 9 and later use v2.
+  Switching RHEL 8 to v2 needs a kernel boot setting and a reboot:
+  ```bash
+  sudo grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
+  sudo reboot
+  ```
+  Afterwards, run `./scripts/check-prereqs.sh` again. RHEL 8's systemd is older than 252, so you'll
+  most likely also need the **delegation** step from the rootless section above (the checker tells you).
+- **On a company-managed machine, ask before changing boot settings.** It affects other software
+  on the machine, and IT may manage those settings centrally. If that's not possible, practical
+  alternatives are: a machine with Docker Desktop (Windows/macOS), a RHEL 9+ or Ubuntu VM, or a
+  small cloud VM.
+
+The course is tested with Docker. kind's Podman support is labelled *experimental* by kind itself,
+so if something behaves differently under Podman, tell whoever maintains this repo.
 
 ### Corporate proxy: trusting a custom root CA inside kind nodes
 

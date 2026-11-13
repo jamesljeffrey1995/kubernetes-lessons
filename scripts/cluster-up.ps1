@@ -41,6 +41,11 @@ if ($env:SKIP_HOST_CHECKS -eq "1") {
     if ($LASTEXITCODE -ne 0) { Die "This machine isn't ready yet - see the FAIL items above." }
 }
 
+# If 'docker' is really Podman, kind must be told to use its Podman provider.
+if (((docker --version 2>$null | Out-String) -match "podman") -and -not $env:KIND_EXPERIMENTAL_PROVIDER) {
+    $env:KIND_EXPERIMENTAL_PROVIDER = "podman"
+}
+
 Step "Creating kind cluster '$ClusterName' (first time takes 1-3 minutes)"
 $existing = @(kind get clusters 2>$null)
 if ($existing -contains $ClusterName) {

@@ -26,6 +26,11 @@ else
   "$ROOT/scripts/check-prereqs.sh" --for-cluster || die "This machine isn't ready yet - see the ✘ items above."
 fi
 
+# If 'docker' is really Podman, kind must be told to use its Podman provider.
+if grep -qi podman <<<"$(docker --version 2>/dev/null)" && [ -z "${KIND_EXPERIMENTAL_PROVIDER:-}" ]; then
+  export KIND_EXPERIMENTAL_PROVIDER=podman
+fi
+
 step "Creating kind cluster '$CLUSTER_NAME' (first time takes 1-3 minutes)"
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
   echo "Cluster '$CLUSTER_NAME' already exists - reusing it."
