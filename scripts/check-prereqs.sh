@@ -14,6 +14,8 @@ set -uo pipefail
 CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 SYS_MODULE_DIR="${SYS_MODULE_DIR:-/sys/module}"
 PROC_MODULES="${PROC_MODULES:-/proc/modules}"
+CGROUP_FS_ROOT="${CGROUP_FS_ROOT:-/sys/fs/cgroup}"
+OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 
 FOR_CLUSTER=false
 [ "${1:-}" = "--for-cluster" ] && FOR_CLUSTER=true
@@ -57,36 +59,69 @@ if ! docker info >/dev/null 2>&1; then
 else
   pass daemon "Docker is running"
 
-  # Podman pretending to be docker: kind needs to be told explicitly.
+  # Docker and Podman report cgroup version and rootless mode under different fields.
   DOCKER_VERSION=$(docker --version 2>/dev/null)
-  if grep -qi podman <<<"$DOCKER_VERSION"; then
-    warn podman "'docker' is really Podman. kind needs: export KIND_EXPERIMENTAL_PROVIDER=podman"
-    fix "The course is tested with Docker; Podman mostly works but is not supported here."
+  IS_PODMAN=false
+  grep -qi podman <<<"$DOCKER_VERSION" && IS_PODMAN=true
+  if $IS_PODMAN; then
+    CGROUP=$(docker info --format '{{.Host.CgroupsVersion}}' 2>/dev/null)   # "v1" or "v2"
+    CGROUP=${CGROUP#v}
+    ROOTLESS=$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null)  # "true"/"false"
+    if [ "${KIND_EXPERIMENTAL_PROVIDER:-}" = "podman" ]; then
+      pass podman "'docker' is Podman, and KIND_EXPERIMENTAL_PROVIDER=podman is set"
+    else
+      warn podman "'docker' is really Podman. kind needs: export KIND_EXPERIMENTAL_PROVIDER=podman"
+      fix "(cluster-up sets this for you automatically.)"
+    fi
+  else
+    CGROUP=$(docker info --format '{{.CgroupVersion}}' 2>/dev/null)          # "1" or "2"
+    ROOTLESS=false
+    grep -q rootless <<<"$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)" && ROOTLESS=true
+  fi
+  # Fallback: ask the Linux filesystem directly (cgroup2fs = v2, tmpfs = v1).
+  if [ -z "$CGROUP" ] && [ -d "$CGROUP_FS_ROOT" ]; then
+    case "$(stat -fc %T "$CGROUP_FS_ROOT" 2>/dev/null)" in
+      cgroup2fs) CGROUP=2 ;;
+      tmpfs)     CGROUP=1 ;;
+    esac
   fi
 
-  # cgroup v2 is required: recent Kubernetes (including 1.37, used here) refuses to start on cgroup v1.
-  CGROUP=$(docker info --format '{{.CgroupVersion}}' 2>/dev/null)
+  IS_RHEL=false
+  grep -qiE '^(ID|ID_LIKE)=.*(rhel|centos|fedora)' "$OS_RELEASE" 2>/dev/null && IS_RHEL=true
+
+  # cgroup v2 is required: recent Kubernetes (including 1.37, used here) refuses to start on
+  # cgroup v1, and kind refuses rootless mode on cgroup v1 outright.
   if [ "$CGROUP" = "2" ]; then
     pass cgroup "cgroup v2"
   elif [ "$CGROUP" = "1" ]; then
     fail cgroup "cgroup v1 - Kubernetes 1.37 (used by kind v0.33) will not start on it"
-    fix "Ubuntu/Debian: add systemd.unified_cgroup_hierarchy=1 to GRUB_CMDLINE_LINUX in"
-    fix "/etc/default/grub, run 'sudo update-grub' and reboot. (Ubuntu 21.10+ is v2 by default.)"
-    fix "WSL2: update WSL ('wsl --update') - recent versions use cgroup v2."
+    if $IS_RHEL; then
+      fix "RHEL/CentOS/Rocky 8 default to cgroup v1 (RHEL 9+ uses v2). Switch to v2 with:"
+      fix "  sudo grubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\""
+      fix "  sudo reboot"
+      fix "On a company-managed machine, changing kernel boot settings may need IT's approval."
+    else
+      fix "Ubuntu/Debian: add systemd.unified_cgroup_hierarchy=1 to GRUB_CMDLINE_LINUX in"
+      fix "/etc/default/grub, run 'sudo update-grub' and reboot. (Ubuntu 21.10+ is v2 by default.)"
+      fix "WSL2: update WSL ('wsl --update') - recent versions use cgroup v2."
+    fi
+    [ "$ROOTLESS" = "true" ] && fix "Then re-run this script: rootless setups usually need the delegation step it shows next."
   else
-    warn cgroup "could not determine the cgroup version ('$CGROUP')"
+    fail cgroup "could not determine the cgroup version"
+    fix "Check by hand: 'stat -fc %T /sys/fs/cgroup' prints cgroup2fs for v2 (needed) or tmpfs for v1."
   fi
 
   # Rootless Docker: works with kind, but needs host settings rootful Docker doesn't.
-  SECURITY=$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)
-  if grep -q rootless <<<"$SECURITY"; then
-    warn rootless "Docker runs in ROOTLESS mode - checking what kind needs for that"
+  if [ "$ROOTLESS" = "true" ]; then
+    warn rootless "containers run in ROOTLESS mode - checking what kind needs for that"
     fix "(If this is your own machine, normal 'rootful' Docker is simpler - see lesson 00.)"
 
     # 1) cgroup delegation: the user's systemd slice must be allowed to manage cpu etc.
     UID_NUM=$(id -u)
     CTRL_FILE="$CGROUP_ROOT/user.slice/user-${UID_NUM}.slice/user@${UID_NUM}.service/cgroup.controllers"
-    if [ -r "$CTRL_FILE" ]; then
+    if [ "$CGROUP" != "2" ]; then
+      warn delegate "can only be checked once the host is on cgroup v2 - re-run this script after switching"
+    elif [ -r "$CTRL_FILE" ]; then
       MISSING=""
       for c in cpu cpuset io memory pids; do
         grep -qw "$c" "$CTRL_FILE" || MISSING="$MISSING $c"
@@ -97,7 +132,11 @@ else
         fail delegate "cgroup controllers not delegated to your user:$MISSING"
         fix "sudo mkdir -p /etc/systemd/system/user@.service.d/"
         fix "printf '[Service]\\nDelegate=yes\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
-        fix "sudo systemctl daemon-reload && systemctl --user restart docker"
+        if $IS_PODMAN; then
+          fix "sudo systemctl daemon-reload, then log out and back in"
+        else
+          fix "sudo systemctl daemon-reload && systemctl --user restart docker"
+        fi
         fix "(systemd 252+ does this by default; yours: $(systemctl --version 2>/dev/null | head -n 1))"
       fi
     else

@@ -2,6 +2,10 @@
 # kind nodes can't see images on your machine; 'kind load' copies them in.
 $Root = Split-Path -Parent $PSScriptRoot
 Push-Location $Root
+# If 'docker' is really Podman, kind must be told to use its Podman provider.
+if (((docker --version 2>$null | Out-String) -match "podman") -and -not $env:KIND_EXPERIMENTAL_PROVIDER) {
+    $env:KIND_EXPERIMENTAL_PROVIDER = "podman"
+}
 try {
     foreach ($version in "v1", "v2") {
         Write-Host "==> Building pulse:$version" -ForegroundColor Cyan
