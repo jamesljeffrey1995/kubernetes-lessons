@@ -28,8 +28,11 @@ fix()  { printf '              %s\n' "$@"; }
 check_tool() {
   local name=$1; shift
   local out
-  if out=$("$@" 2>/dev/null | head -n 1) && [ -n "$out" ]; then
-    pass "$name" "$out"
+  # Capture ALL output, then take the first line. Piping straight into 'head -n 1' can kill
+  # the tool with SIGPIPE (e.g. 'kubectl version' prints 2 lines) and, with pipefail, make a
+  # working tool look broken - randomly.
+  if out=$("$@" 2>/dev/null) && [ -n "$out" ]; then
+    pass "$name" "${out%%$'\n'*}"
   else
     fail "$name" "not found or not working (see lessons/00-setup/README.md)"
   fi
@@ -55,7 +58,8 @@ else
   pass daemon "Docker is running"
 
   # Podman pretending to be docker: kind needs to be told explicitly.
-  if docker --version 2>/dev/null | grep -qi podman; then
+  DOCKER_VERSION=$(docker --version 2>/dev/null)
+  if grep -qi podman <<<"$DOCKER_VERSION"; then
     warn podman "'docker' is really Podman. kind needs: export KIND_EXPERIMENTAL_PROVIDER=podman"
     fix "The course is tested with Docker; Podman mostly works but is not supported here."
   fi
@@ -74,7 +78,8 @@ else
   fi
 
   # Rootless Docker: works with kind, but needs host settings rootful Docker doesn't.
-  if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+  SECURITY=$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)
+  if grep -q rootless <<<"$SECURITY"; then
     warn rootless "Docker runs in ROOTLESS mode - checking what kind needs for that"
     fix "(If this is your own machine, normal 'rootful' Docker is simpler - see lesson 00.)"
 

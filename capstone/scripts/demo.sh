@@ -85,7 +85,7 @@ pause
 title "5. Node maintenance: drain a worker node"
 REDIS_NODE=$(kubectl get pod pulse-redis-0 -n $NS -o jsonpath='{.spec.nodeName}')
 NODE=$(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[*].metadata.name}' \
-       | tr ' ' '\n' | grep -vx "$REDIS_NODE" | head -n 1)
+       | tr ' ' '\n' | grep -vx "$REDIS_NODE" | sed -n 1p)
 say "Draining $NODE (the node without Redis: kind's local disks can't move between nodes)."
 say "Pods are evicted gracefully and rescheduled; the PodDisruptionBudget keeps at least 1 running."
 say "(--force also removes unmanaged Pods, like the lessons' 'toolbox' Pod, from that node.)"
