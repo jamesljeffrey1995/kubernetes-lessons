@@ -52,7 +52,34 @@ if ($existing -contains $ClusterName) {
     Write-Host "Cluster '$ClusterName' already exists - reusing it."
     Invoke-Native kubectl config use-context "kind-$ClusterName" | Out-Null
 } else {
-    Invoke-Native kind create cluster --config $KindConfig
+    # Rootless Podman (Linux): kind's docs say some distros need kind started in its own systemd
+    # scope with cgroup delegation. https://kind.sigs.k8s.io/docs/user/rootless/
+    $rootlessPodman = ($env:KIND_EXPERIMENTAL_PROVIDER -eq "podman") -and
+        ((docker info --format '{{.Host.Security.Rootless}}' 2>$null | Out-String).Trim() -eq "true") -and
+        (Get-Command systemd-run -ErrorAction SilentlyContinue)
+    if ($rootlessPodman) {
+        Write-Host "Rootless Podman detected: starting kind in its own systemd scope (Delegate=yes)."
+        $output = & systemd-run --scope --user -p "Delegate=yes" kind create cluster --config $KindConfig 2>&1
+    } else {
+        $output = & kind create cluster --config $KindConfig 2>&1
+    }
+    $code = $LASTEXITCODE
+    $output | ForEach-Object { Write-Host $_ }
+    if ($code -ne 0) {
+        $text = ($output | Out-String)
+        if ($text -match "could not find a log line") {
+            Warn "Known rootless-Podman issue: kind can't see the node's boot log. Fix, then re-run:"
+            Warn "  mkdir -p ~/.config/containers"
+            Warn "  printf '[containers]\nlog_driver = `"k8s-file`"\n' >> ~/.config/containers/containers.conf"
+        } elseif ($text -match "Delegate=yes") {
+            Warn "cgroup delegation still isn't active for your user. Run .\scripts\check-prereqs.ps1;"
+            Warn "after changing delegate.conf you must FULLY log out (every session) or reboot."
+        } elseif ($text -match "cgroup v2") {
+            Warn "kind still sees cgroup v1. Check: stat -fc %T /sys/fs/cgroup  (must print cgroup2fs)"
+        }
+        kind delete cluster --name $ClusterName *> $null
+        Die "kind could not create the cluster (full output above)."
+    }
 }
 Invoke-Native kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
