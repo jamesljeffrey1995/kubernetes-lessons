@@ -112,12 +112,15 @@ if ($LASTEXITCODE -ne 0) {
             } else {
                 Fail "delegate" "cgroup controllers not delegated to your user: $($missing -join ' ')"
                 Fix "sudo mkdir -p /etc/systemd/system/user@.service.d/"
-                Fix "printf '[Service]\nDelegate=yes\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
-                if ($isPodman) { Fix "sudo systemctl daemon-reload, then log out and back in" }
-                else { Fix "sudo systemctl daemon-reload; systemctl --user restart docker" }
+                Fix "printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
+                Fix "sudo systemctl daemon-reload"
+                Fix "Then REBOOT (or log out of every session) - the setting applies when your user's systemd restarts."
+                Fix "Verify: systemctl show `"user@`$(id -u).service`" -p DelegateControllers"
             }
         } else {
-            Warn "delegate" "could not read $ctrlFile to check cgroup delegation"
+            Fail "delegate" "no systemd user session for your user ($ctrlFile is missing)"
+            Fix "Rootless containers need one. Common cause: switching user with 'su' or 'sudo -i'."
+            Fix "Log in directly as yourself, or run: sudo loginctl enable-linger `"`$USER`" (then log in again)."
         }
         $loaded = @()
         if (Test-Path $ProcModules) { $loaded = Get-Content $ProcModules | ForEach-Object { ($_ -split ' ')[0] } }

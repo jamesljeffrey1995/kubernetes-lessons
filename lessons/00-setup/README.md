@@ -224,10 +224,19 @@ three and prints the fix for whichever is missing:
    default with systemd 252 or newer (`systemctl --version`). On older systemd:
    ```bash
    sudo mkdir -p /etc/systemd/system/user@.service.d/
-   printf '[Service]\nDelegate=yes\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+   printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
    sudo systemctl daemon-reload
-   systemctl --user restart docker
    ```
+   Name the controllers explicitly as shown; plain `Delegate=yes` doesn't hand over `cpu` on some
+   older systemd versions (RHEL 8's systemd 239, for example). Podman's troubleshooting guide uses
+   the same explicit form. **Then reboot, or log out of every session.** The setting only applies
+   when your user's systemd instance restarts, and closing one terminal doesn't do that. Check it:
+   ```bash
+   systemctl show "user@$(id -u).service" -p DelegateControllers
+   cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers   # must include cpu
+   ```
+   If `user-<uid>.slice` doesn't exist at all, no systemd user session is running for you (common
+   after `su`/`sudo`). Log in directly as yourself, or run `sudo loginctl enable-linger "$USER"`.
 3. **iptables kernel modules.** Without them, Services and the Traefik gateway don't route traffic:
    ```bash
    printf 'ip6_tables\nip6table_nat\nip_tables\niptable_nat\n' | sudo tee /etc/modules-load.d/iptables.conf
