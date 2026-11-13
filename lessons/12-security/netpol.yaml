@@ -1,0 +1,31 @@
+# 1) Default deny: no Pod in 'secure' accepts ANY incoming traffic...
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: secure
+spec:
+  podSelector: {}              # {} = every Pod in the namespace
+  policyTypes: ["Ingress"]
+---
+# 2) ...except: the backend accepts traffic on port 80 from Pods labelled role=frontend,
+#    in ANY namespace. Everything else stays blocked.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-frontend
+  namespace: secure
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {}        # any namespace...
+          podSelector:                 # ...but only Pods with this label
+            matchLabels:
+              role: frontend
+      ports:
+        - port: 80
+          protocol: TCP

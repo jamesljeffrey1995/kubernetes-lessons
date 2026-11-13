@@ -1,0 +1,24 @@
+# Load generator: 4 Pods, each hammering the cpu-app Service in a tight loop.
+# Delete this to stop the load:  kubectl delete -f lessons/13-jobs-autoscaling/load.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: load
+  template:
+    metadata:
+      labels:
+        app: load
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: load
+          image: busybox:1.37
+          command: ["sh", "-c", "while true; do wget -q -O- http://cpu-app/cgi-bin/work >/dev/null 2>&1; done"]
+          resources:
+            requests: { cpu: 10m, memory: 8Mi }
+            limits: { memory: 32Mi }

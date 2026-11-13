@@ -1,0 +1,63 @@
+# Two tiny "versions" of an app, blue and green, each with its own Service.
+# hashicorp/http-echo just replies with the text it was given.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: echo, version: blue }
+  template:
+    metadata:
+      labels: { app: echo, version: blue }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0
+          args: ["-text=BLUE  (v1)", "-listen=:5678"]
+          ports: [{ name: http, containerPort: 5678 }]
+          readinessProbe:
+            httpGet: { path: /, port: http }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 32Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blue
+spec:
+  selector: { app: echo, version: blue }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: echo, version: green }
+  template:
+    metadata:
+      labels: { app: echo, version: green }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0
+          args: ["-text=GREEN (v2)", "-listen=:5678"]
+          ports: [{ name: http, containerPort: 5678 }]
+          readinessProbe:
+            httpGet: { path: /, port: http }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 32Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: green
+spec:
+  selector: { app: echo, version: green }
+  ports: [{ name: http, port: 80, targetPort: http }]

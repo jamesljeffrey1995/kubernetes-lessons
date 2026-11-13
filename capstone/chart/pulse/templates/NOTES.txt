@@ -1,0 +1,6 @@
+Pulse {{ .Values.image.tag | default .Chart.AppVersion }} is deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+{{ if .Values.route.enabled }}
+  Dashboard:  http://{{ .Values.route.hostname }}:8080
+{{- end }}
+  Pods:       kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+  Self-test:  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

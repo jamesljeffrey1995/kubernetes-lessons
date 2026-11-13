@@ -1,0 +1,9 @@
+# The capstone runs in its own namespace, enforcing the "restricted" Pod Security Standard.
+# Every Pod in the chart is written to pass it - a good thing to point out in a demo.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pulse
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted

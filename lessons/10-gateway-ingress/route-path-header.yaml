@@ -1,0 +1,35 @@
+# One hostname, routed by PATH and by HEADER:
+#   http://shop.localhost:8080/blue            -> blue
+#   http://shop.localhost:8080/green           -> green
+#   any path with header "x-version: green"    -> green  (handy for testers)
+#   anything else                              -> blue
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shop
+spec:
+  parentRefs:
+    - name: main
+      namespace: traefik
+  hostnames: ["shop.localhost"]
+  rules:
+    - matches:
+        - headers:
+            - name: x-version
+              value: green
+      backendRefs:
+        - name: green
+          port: 80
+    - matches:
+        - path: { type: PathPrefix, value: /green }
+      backendRefs:
+        - name: green
+          port: 80
+    - matches:
+        - path: { type: PathPrefix, value: /blue }
+      backendRefs:
+        - name: blue
+          port: 80
+    - backendRefs:              # no 'matches' = catch-all
+        - name: blue
+          port: 80

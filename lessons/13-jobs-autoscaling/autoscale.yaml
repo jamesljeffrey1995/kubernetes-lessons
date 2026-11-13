@@ -1,0 +1,91 @@
+# A web server where every request burns some CPU, plus a HorizontalPodAutoscaler.
+#
+# busybox httpd serves /www; anything under /www/cgi-bin is run as a program (CGI).
+# /cgi-bin/work counts to 30,000 in shell - about 50-100 ms of pure CPU per request.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cpu-app
+data:
+  work: |
+    #!/bin/sh
+    i=0
+    while [ $i -lt 30000 ]; do i=$((i+1)); done
+    echo "Content-Type: text/plain"
+    echo ""
+    echo "worked hard on $(hostname)"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cpu-app
+  template:
+    metadata:
+      labels:
+        app: cpu-app
+    spec:
+      containers:
+        - name: httpd
+          image: busybox:1.37
+          command: ["httpd", "-f", "-p", "8080", "-h", "/www"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+          resources:
+            requests:
+              cpu: 100m              # HPA percentages are relative to THIS number
+              memory: 16Mi
+            limits:
+              cpu: 500m
+              memory: 64Mi
+          volumeMounts:
+            - name: cgi
+              mountPath: /www/cgi-bin
+      volumes:
+        - name: cgi
+          configMap:
+            name: cpu-app
+            defaultMode: 0755        # the script must be executable
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-app
+spec:
+  selector:
+    app: cpu-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Keep average CPU usage around 50% of the request (= 50m per Pod), with 1 to 8 Pods.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cpu-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cpu-app
+  minReplicas: 1
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30   # default is 300s; shortened so the demo doesn't drag

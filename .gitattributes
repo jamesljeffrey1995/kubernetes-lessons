@@ -1,0 +1,11 @@
+# Keep shell scripts and files that go into Linux containers with LF line endings,
+# even when cloned on Windows with core.autocrlf=true. A CRLF in a .sh file or a
+# Dockerfile-copied script produces confusing "\r: command not found" errors.
+* text=auto
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.go text eol=lf
+*.tpl text eol=lf
+Dockerfile text eol=lf
+*.ps1 text eol=crlf

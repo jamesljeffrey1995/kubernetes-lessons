@@ -1,0 +1,26 @@
+# kind cluster used by every lesson.
+#
+# 1 control-plane node + 2 worker nodes, each one a Docker container on your machine.
+# Port 8080 on your machine is forwarded to port 80 on the control-plane node, where the
+# Traefik gateway listens (see platform/traefik.yaml). That is how http://localhost:8080
+# reaches apps running inside the cluster in lessons 10+.
+#
+# listenAddress 127.0.0.1 means only your own machine can reach it, not the office network.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lessons
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+  - role: worker
+  - role: worker

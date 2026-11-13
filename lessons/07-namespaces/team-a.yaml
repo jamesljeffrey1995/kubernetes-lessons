@@ -1,0 +1,38 @@
+# A namespace for "team A", with guard rails:
+#   - ResourceQuota: a budget for the WHOLE namespace
+#   - LimitRange:    defaults and limits for EACH container that doesn't specify its own
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a
+  labels:
+    team: a
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: budget
+  namespace: team-a
+spec:
+  hard:
+    pods: "5"                  # at most 5 Pods in this namespace
+    requests.cpu: "1"          # sum of all CPU requests <= 1 CPU
+    requests.memory: 1Gi       # sum of all memory requests <= 1 GiB
+    limits.memory: 2Gi
+    services.nodeports: "0"    # this team may not open NodePorts
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: defaults
+  namespace: team-a
+spec:
+  limits:
+    - type: Container
+      defaultRequest:          # used when a container sets no requests
+        cpu: 100m
+        memory: 64Mi
+      default:                 # used when a container sets no limits
+        memory: 128Mi
+      max:
+        memory: 512Mi          # no single container may ask for more than this

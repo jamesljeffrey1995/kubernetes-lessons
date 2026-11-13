@@ -1,0 +1,66 @@
+# ------------------------------------------------------------------ app
+replicaCount: 3                  # ignored when autoscaling.enabled=true (the HPA owns it)
+
+image:
+  repository: pulse
+  tag: ""                        # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+app:
+  color: "#2563eb"               # tile colour on the dashboard
+  message: "Hello from Kubernetes"
+  shutdownDelay: 5s              # keep serving this long after SIGTERM (see main.go)
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1                # never let voluntary disruptions (node drains) take ALL Pods
+
+# ------------------------------------------------------------------ traffic
+service:
+  port: 80
+
+route:
+  enabled: true
+  hostname: pulse.localhost
+  gateway:
+    name: main
+    namespace: traefik
+
+networkPolicy:
+  enabled: true
+  # The namespace the gateway (Traefik) runs in - it must be allowed to reach the app.
+  gatewayNamespace: traefik
+
+# ------------------------------------------------------------------ redis
+redis:
+  enabled: true
+  image: redis:8.6-alpine
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""             # "" = cluster default
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  # Only used when redis.enabled=false: point at an existing Redis, e.g. a managed one.
+  externalAddr: ""
+
+# ------------------------------------------------------------------ tests
+tests:
+  image: curlimages/curl:8.17.0

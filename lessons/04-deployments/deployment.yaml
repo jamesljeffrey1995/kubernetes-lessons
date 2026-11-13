@@ -1,0 +1,29 @@
+# A Deployment keeps N identical Pods running and replaces them safely when you change them.
+#
+#   Deployment  --manages-->  ReplicaSet (one per version)  --manages-->  Pods
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app: web
+spec:
+  replicas: 3                     # desired number of Pods
+  selector:
+    matchLabels:
+      app: web                    # "the Pods I own are the ones with this label"...
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                 # during an update, at most 1 extra Pod above 'replicas'
+      maxUnavailable: 0           # ...and never fewer than 'replicas' ready Pods = zero downtime
+  template:                       # the Pod to stamp out (same fields as a Pod's metadata+spec)
+    metadata:
+      labels:
+        app: web                  # ...so the template MUST carry that label
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80

@@ -1,0 +1,6 @@
+# Let the HorizontalPodAutoscaler manage the replica count.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 50

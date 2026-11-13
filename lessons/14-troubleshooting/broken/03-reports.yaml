@@ -1,0 +1,21 @@
+# Ticket #3: "We deployed reports an hour ago and there's still nothing running."
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reports
+  namespace: broken
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: reports }
+  template:
+    metadata:
+      labels: { app: reports }
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.29-alpine
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Gi

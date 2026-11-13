@@ -1,0 +1,58 @@
+# Headless Service (clusterIP: None): no load-balancing virtual IP. Instead DNS returns each
+# Pod individually, giving every StatefulSet Pod a stable name:
+#   redis-0.redis.default.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  clusterIP: None
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+---
+# StatefulSet: like a Deployment, but each Pod gets
+#   - a stable, ordered name (redis-0, redis-1, ...) that survives restarts
+#   - its OWN PersistentVolumeClaim (from volumeClaimTemplates), re-attached on restart
+#   - ordered start-up and shutdown
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  serviceName: redis           # the headless Service above
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.6-alpine
+          args: ["--appendonly", "yes"]   # write every change to disk (in /data)
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+  volumeClaimTemplates:        # one PVC per Pod: data-redis-0, data-redis-1, ...
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

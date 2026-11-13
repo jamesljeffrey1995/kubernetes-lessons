@@ -1,0 +1,6 @@
+# Release 2 of Pulse: new image and a new colour, so the rolling update is visible.
+image:
+  tag: v2
+app:
+  color: "#16a34a"
+  message: "Hello from version 2!"

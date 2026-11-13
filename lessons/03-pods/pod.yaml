@@ -1,0 +1,14 @@
+# The smallest useful Kubernetes object: one Pod running one container.
+apiVersion: v1          # which API version this object type lives in (kubectl explain pod shows it)
+kind: Pod               # what type of object
+metadata:
+  name: web             # unique within a namespace
+  labels:               # free-form key/value tags, used to select and group objects
+    app: web
+    tier: frontend
+spec:                   # desired state
+  containers:
+    - name: nginx
+      image: nginx:1.29-alpine   # always pin a version tag; never rely on ":latest"
+      ports:
+        - containerPort: 80      # documentation only - does not open or restrict anything

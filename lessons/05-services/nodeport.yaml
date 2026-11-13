@@ -1,0 +1,14 @@
+# NodePort: opens the same port (30000-32767) on EVERY node and forwards it to the Pods.
+# Useful on bare-metal/VMs; on cloud you'd normally use LoadBalancer or a Gateway instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: whoami-nodeport
+spec:
+  type: NodePort
+  selector:
+    app: whoami
+  ports:
+    - port: 80
+      targetPort: http
+      nodePort: 30080          # omit to let Kubernetes pick a free one

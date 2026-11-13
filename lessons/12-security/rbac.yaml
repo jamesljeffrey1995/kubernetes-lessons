@@ -1,0 +1,79 @@
+# A ServiceAccount (an identity for software running in Pods) that may READ Pods and their
+# logs in the 'secure' namespace - and nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-reader
+  namespace: secure
+---
+# Role = a set of permissions, inside ONE namespace. (ClusterRole = cluster-wide.)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: read-pods
+  namespace: secure
+rules:
+  - apiGroups: [""]                    # "" = the core API group (pods, services, secrets...)
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+# RoleBinding = "this identity gets that Role, in this namespace"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-reader-can-read-pods
+  namespace: secure
+subjects:
+  - kind: ServiceAccount
+    name: pod-reader
+    namespace: secure
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-pods
+---
+# A tiny script that calls the Kubernetes API using the Pod's own ServiceAccount token
+# and prints the HTTP status code (200 = allowed, 403 = forbidden).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: call-api
+  namespace: secure
+data:
+  call-api.sh: |
+    SA=/var/run/secrets/kubernetes.io/serviceaccount
+    curl -s -o /dev/null -w "%{http_code}\n" \
+      --cacert "$SA/ca.crt" \
+      -H "Authorization: Bearer $(cat $SA/token)" \
+      "https://kubernetes.default.svc$1"
+---
+# A Pod running AS that ServiceAccount, so we can call the API with its token.
+# (It satisfies the namespace's "restricted" Pod Security rules.)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-client
+  namespace: secure
+spec:
+  serviceAccountName: pod-reader
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: curlimages/curl:8.17.0
+      command: ["sleep", "infinity"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+  volumes:
+    - name: scripts
+      configMap:
+        name: call-api

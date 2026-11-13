@@ -1,0 +1,24 @@
+# A Job runs Pods until a number of them SUCCEED, then stops. Good for batch work,
+# migrations, reports. Here: 6 work items, processed 2 at a time.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: process-items
+spec:
+  completions: 6                 # total successful Pods needed
+  parallelism: 2                 # how many run at the same time
+  completionMode: Indexed        # each Pod gets JOB_COMPLETION_INDEX = 0..5 (its work item)
+  backoffLimit: 3                # retries before the Job is marked Failed
+  ttlSecondsAfterFinished: 600   # delete the Job (and its Pods) 10 min after it finishes
+  template:
+    spec:
+      restartPolicy: Never       # Jobs need Never or OnFailure (not the default Always)
+      containers:
+        - name: worker
+          image: busybox:1.37
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "Processing item $JOB_COMPLETION_INDEX on $(hostname)"
+              sleep 3
+              echo "Item $JOB_COMPLETION_INDEX done"

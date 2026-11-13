@@ -1,0 +1,28 @@
+# Route by HOSTNAME: http://blue.localhost:8080 -> blue, http://green.localhost:8080 -> green
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: blue
+spec:
+  parentRefs:                  # which Gateway(s) this route attaches to
+    - name: main
+      namespace: traefik
+  hostnames: ["blue.localhost"]
+  rules:
+    - backendRefs:
+        - name: blue           # a Service in THIS namespace
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: green
+spec:
+  parentRefs:
+    - name: main
+      namespace: traefik
+  hostnames: ["green.localhost"]
+  rules:
+    - backendRefs:
+        - name: green
+          port: 80

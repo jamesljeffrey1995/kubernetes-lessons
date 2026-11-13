@@ -1,0 +1,36 @@
+# Load generator for the autoscaling demo: each Pod calls /api/work in a loop, which burns
+# ~40ms of CPU per request in the Pulse Pods. Stop it with: kubectl delete -f capstone/k8s/load.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load
+  namespace: pulse
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: load
+  template:
+    metadata:
+      labels:
+        app: load
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: load
+          image: curlimages/curl:8.17.0
+          command: ["sh", "-c", "while true; do curl -s -o /dev/null 'http://pulse/api/work?ms=40'; done"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 32Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

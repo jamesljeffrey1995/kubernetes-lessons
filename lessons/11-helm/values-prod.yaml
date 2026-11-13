@@ -1,0 +1,11 @@
+# Settings for the "prod" environment
+replicaCount: 3
+greetingName: "hello-PROD"
+route:
+  hostname: hello-prod.localhost
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 64Mi

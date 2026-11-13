@@ -1,0 +1,19 @@
+# CANARY release: send 90% of traffic to the current version and 10% to the new one.
+# Shift the weights (e.g. 50/50, then 0/100) to finish the rollout - or back to 100/0 to abort.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary
+spec:
+  parentRefs:
+    - name: main
+      namespace: traefik
+  hostnames: ["canary.localhost"]
+  rules:
+    - backendRefs:
+        - name: blue
+          port: 80
+          weight: 90
+        - name: green
+          port: 80
+          weight: 10
