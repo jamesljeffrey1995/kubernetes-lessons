@@ -131,16 +131,16 @@ else
       else
         fail delegate "cgroup controllers not delegated to your user:$MISSING"
         fix "sudo mkdir -p /etc/systemd/system/user@.service.d/"
-        fix "printf '[Service]\\nDelegate=yes\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
-        if $IS_PODMAN; then
-          fix "sudo systemctl daemon-reload, then log out and back in"
-        else
-          fix "sudo systemctl daemon-reload && systemctl --user restart docker"
-        fi
+        fix "printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
+        fix "sudo systemctl daemon-reload"
+        fix "Then REBOOT (or log out of every session) - the setting applies when your user's systemd restarts."
+        fix "Verify: systemctl show \"user@\$(id -u).service\" -p DelegateControllers"
         fix "(systemd 252+ does this by default; yours: $(systemctl --version 2>/dev/null | head -n 1))"
       fi
     else
-      warn delegate "could not read $CTRL_FILE to check cgroup delegation"
+      fail delegate "no systemd user session for your user ($CTRL_FILE is missing)"
+      fix "Rootless containers need one. Common cause: switching user with 'su' or 'sudo -i'."
+      fix "Log in directly as yourself, or run: sudo loginctl enable-linger \"\$USER\" (then log in again)."
     fi
 
     # 2) iptables modules: without them, Services and the gateway don't work in rootless mode.

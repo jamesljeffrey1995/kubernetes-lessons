@@ -73,7 +73,7 @@ scenario "cgroup v1 fails"                    1 "update-grub" -- \
   FAKE_CGROUP=1 OS_RELEASE="$WORK/os-release-ubuntu"
 scenario "rootless, everything set up"        0 "iptables kernel modules loaded" -- \
   FAKE_SECURITY="$ROOTLESS" CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-good" PROC_MODULES="$WORK/proc-modules-empty"
-scenario "rootless, no cgroup delegation"     1 "Delegate=yes" -- \
+scenario "rootless, no cgroup delegation"     1 "Delegate=cpu cpuset io memory pids" -- \
   FAKE_SECURITY="$ROOTLESS" CGROUP_ROOT="$WORK/cg-bad" SYS_MODULE_DIR="$WORK/mods-good" PROC_MODULES="$WORK/proc-modules-empty"
 scenario "rootless, iptables modules missing" 1 "modules-load.d/iptables.conf" -- \
   FAKE_SECURITY="$ROOTLESS" CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-none" PROC_MODULES="$WORK/proc-modules-empty"
@@ -85,6 +85,8 @@ scenario "RHEL 8 rootless Podman on cgroup v1" 1 "grubby --update-kernel=ALL" --
 scenario "rootless Podman, cgroup v2, set up"  0 "iptables kernel modules loaded" -- \
   FAKE_DOCKER_VERSION="podman version 4.9.4-rhel" FAKE_PODMAN_CGROUP=v2 FAKE_PODMAN_ROOTLESS=true \
   KIND_EXPERIMENTAL_PROVIDER=podman CGROUP_ROOT="$WORK/cg-good" SYS_MODULE_DIR="$WORK/mods-good" PROC_MODULES="$WORK/proc-modules-empty"
+scenario "rootless, no systemd user session"  1 "enable-linger" -- \
+  FAKE_SECURITY="$ROOTLESS" CGROUP_ROOT="$WORK/not-a-cgroup-fs" SYS_MODULE_DIR="$WORK/mods-good" PROC_MODULES="$WORK/proc-modules-empty"
 scenario "cgroup version unknown is a failure" 1 "could not determine the cgroup version" -- \
   FAKE_CGROUP= CGROUP_FS_ROOT="$WORK/not-a-cgroup-fs"
 
