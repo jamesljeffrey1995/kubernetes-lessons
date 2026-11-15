@@ -252,8 +252,8 @@ Three rules that save the most time:
 
 1. **Never run the scripts with `sudo`.** That creates the cluster in root's engine with root's
    kubeconfig, and your own user then sees nothing.
-2. **After changing a systemd or sysctl setting, reboot.** "Log out and in again" isn't enough
-   while any other session (SSH, VS Code remote, tmux) is still open.
+2. **After changing a systemd setting (cgroup delegation), reboot.** "Log out and in again" isn't
+   enough while any other session (SSH, VS Code remote, tmux) is still open.
 3. **Run `loginctl enable-linger`**, or the whole cluster stops when you log out.
 
 **[The full list of rootless failures, causes and fixes is in rootless.md](rootless.md)**: 35
