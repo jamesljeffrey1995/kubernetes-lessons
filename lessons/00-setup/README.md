@@ -76,6 +76,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\cluster-up.ps1
 
 ### 1. Docker Engine
 
+> **Red Hat family (RHEL, Rocky, Alma, Fedora):** Podman is already installed and works with this
+> course, so you can skip this step. Podman runs *rootless*, which needs extra host settings: read
+> ["Rootless Docker, Podman and Red Hat machines"](#rootless-docker-podman-and-red-hat-machines) below first.
+
 Use Docker's official convenience script, or follow your distro's guide at <https://docs.docker.com/engine/install/>:
 
 ```bash
@@ -146,8 +150,11 @@ Besides the tools, the checker inspects **how Docker is set up**, because that's
 | Check | Why it matters |
 |---|---|
 | **cgroup v2** | Kubernetes 1.37 refuses to start on cgroup v1 hosts. Old Linux distros, or an outdated WSL, can still be on v1 |
-| **Rootless Docker** | kind supports it, but only with extra host settings (below). Some corporate Linux machines run Docker rootless |
-| **Podman posing as `docker`** | kind must be told to use Podman explicitly |
+| **Memory** | What the *engine* has, which on Docker Desktop or a Podman machine is the size of its VM, not of your laptop |
+| **Proxy settings** | With a company proxy, `NO_PROXY` must list `localhost,127.0.0.1` or `kubectl` can't reach your own cluster |
+| **Podman instead of Docker** | kind must be told to use Podman explicitly (the scripts do that) |
+| **Rootless mode** | About ten extra host settings (delegation, sub-UIDs, storage, kernel modules, lingering...). See [rootless.md](rootless.md) |
+| **`sudo`** | Running the scripts with sudo puts the cluster where your own user can't see it |
 
 Every problem it finds comes with the exact command to fix it. `cluster-up` runs the same checks
 first and stops with that advice, instead of failing halfway through with a kind stack trace.
@@ -175,8 +182,8 @@ lessons-worker          Ready    <none>          1m    v1.37.0
 lessons-worker2         Ready    <none>          1m    v1.37.0
 ```
 
-**You now have a Kubernetes cluster.** Each "node" is a Docker container. Run `docker ps` and you
-will see `lessons-control-plane`, `lessons-worker` and `lessons-worker2`.
+**You now have a Kubernetes cluster.** Each "node" is a Docker container. Run `docker ps`
+(`podman ps` on Podman) and you will see `lessons-control-plane`, `lessons-worker` and `lessons-worker2`.
 
 To delete it (e.g. to free RAM, or to start fresh if you break something):
 
@@ -200,8 +207,11 @@ These are real issues people hit on corporate laptops:
 | `kind create cluster` hangs or nodes stay `NotReady` | VPN client hijacking Docker's network range | Try off VPN once to confirm, then ask IT about split tunnelling for `172.16.0.0/12` |
 | `port is already allocated` on 8080 | Something else uses port 8080 | Change `hostPort: 8080` in `platform/kind-config.yaml` to e.g. `8081` and use that port wherever lessons say `8080` |
 | `toomanyrequests: You have reached your unauthenticated pull rate limit` | Docker Hub limits anonymous pulls per IP, and an office shares one IP | Wait (the limit resets within hours), `docker login` with a free Docker Hub account for pulls on your machine, or ask whether your company has a registry mirror. Pods show this as `ImagePullBackOff` |
-| `kind create cluster` fails with an error mentioning **rootless** | Docker runs in rootless mode without the host settings kind needs | Run `check-prereqs`: it says exactly what's missing. Details in "Rootless Docker" below |
-| `running kind with rootless provider requires cgroup v2` | Rootless Docker/Podman on a cgroup v1 host (typically RHEL 8) | See "Red Hat (RHEL) machines with Podman" below |
+| `kind create cluster` fails with an error mentioning **rootless**, `Delegate=yes`, sub-UIDs or `could not find a log line` | Rootless Docker/Podman without the host settings kind needs | Run `check-prereqs`: it says exactly what's missing. Every known case is in [rootless.md](rootless.md) |
+| `running kind with rootless provider requires cgroup v2` | Rootless Docker/Podman on a cgroup v1 host (typically RHEL 8) | See [rootless.md](rootless.md), "RHEL 8" |
+| `kubectl` says `connection refused` after a reboot | The node containers are stopped (Podman never restarts them) | Run `cluster-up` again: it starts them |
+| `kubectl` fails with a proxy error or `Forbidden` on a local cluster | `HTTPS_PROXY` is set and `NO_PROXY` doesn't include `localhost,127.0.0.1` | Add them to `NO_PROXY` (`check-prereqs` shows the command) |
+| Cluster creation hangs, or nodes never become Ready, on Docker Desktop / Podman machine | The engine's VM has too little memory | Give it 6-8 GB (`check-prereqs` reports what it has) |
 | kubelet fails with `cgroup v1 support is unsupported` | The host (or WSL) uses cgroup v1 | `check-prereqs` shows the fix: enable cgroup v2 on Linux, or `wsl --update` on Windows |
 | `Cannot connect to the Docker daemon` | Docker Desktop not started / Linux user not in `docker` group | Start Docker Desktop / log out and back in |
 | Script says `running scripts is disabled on this system` | PowerShell execution policy | See "Allow the course scripts to run" above |
@@ -213,77 +223,49 @@ paid Docker subscription. If your company doesn't have one, **Rancher Desktop** 
 works with this course: install it, choose the "dockerd (moby)" container engine in its settings,
 and disable its built-in Kubernetes.
 
-### Rootless Docker
+### Rootless Docker, Podman and Red Hat machines
 
-In rootless mode the Docker daemon runs as *your* user instead of root. It's more secure, and
-kind supports it, but the host needs three things. `./scripts/check-prereqs.sh` checks all
-three and prints the fix for whichever is missing:
+In rootless mode the container engine runs as *your* user instead of root. Podman works that way
+by default (so every RHEL, Rocky, Alma and Fedora machine does), and Docker can be installed that
+way. kind supports it, but it is the setup with the most ways to fail: it needs cgroup v2, cgroup
+delegation, sub-UIDs, kernel modules loaded in advance, local (not NFS) storage and a proper
+login session, and it behaves differently after a logout or reboot.
 
-1. **cgroup v2.** `docker info` shows `Cgroup Version: 2`.
-2. **cgroup delegation** lets your user's services manage CPU and memory limits. It's on by
-   default with systemd 252 or newer (`systemctl --version`). On older systemd:
-   ```bash
-   sudo mkdir -p /etc/systemd/system/user@.service.d/
-   printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
-   sudo systemctl daemon-reload
-   ```
-   Name the controllers explicitly as shown; plain `Delegate=yes` doesn't hand over `cpu` on some
-   older systemd versions (RHEL 8's systemd 239, for example). Podman's troubleshooting guide uses
-   the same explicit form. **Then reboot, or log out of every session.** The setting only applies
-   when your user's systemd instance restarts, and closing one terminal doesn't do that. Check it:
-   ```bash
-   systemctl show "user@$(id -u).service" -p DelegateControllers
-   cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers   # must include cpu
-   ```
-   If `user-<uid>.slice` doesn't exist at all, no systemd user session is running for you (common
-   after `su`/`sudo`). Log in directly as yourself, or run `sudo loginctl enable-linger "$USER"`.
-3. **iptables kernel modules.** Without them, Services and the Traefik gateway don't route traffic:
-   ```bash
-   printf 'ip6_tables\nip6table_nat\nip_tables\niptable_nat\n' | sudo tee /etc/modules-load.d/iptables.conf
-   sudo systemctl restart systemd-modules-load.service
-   ```
+You don't have to know any of that up front:
 
-Then re-run `./scripts/check-prereqs.sh` and `./scripts/cluster-up.sh`.
+```bash
+./scripts/check-prereqs.sh    # fix every ✘ it prints, re-run until there are none
+./scripts/cluster-up.sh       # recognises the common kind errors and prints the fix
+```
 
-**On your own machine, normal ("rootful") Docker is simpler.** To switch back from rootless:
-`dockerd-rootless-setuptool.sh uninstall`, install Docker as in step 1 above, then
-`docker context use default`. On a work machine where rootless is the policy, use the steps above
-rather than fighting it. Source: [kind's rootless guide](https://kind.sigs.k8s.io/docs/user/rootless/).
+What the scripts take care of for you:
 
-### Red Hat (RHEL) machines with Podman
+- **No `docker` command?** They use `podman` directly. Where a lesson says `docker ps` or
+  `docker exec`, type `podman ps` / `podman exec`.
+- They set `KIND_EXPERIMENTAL_PROVIDER=podman` when the engine is Podman. Set it yourself
+  (`export KIND_EXPERIMENTAL_PROVIDER=podman`, ideally in `~/.bashrc`) for `kind` commands you type by hand.
+- On rootless Podman they start kind inside its own systemd scope, which RHEL needs.
+- After a reboot, re-running `cluster-up` starts the stopped nodes (Podman never restarts them itself).
+- The capstone build avoids `kind load docker-image`, which doesn't work with Podman.
 
-RHEL ships **Podman** instead of Docker, often with a `docker` command that's really Podman
-(`docker --version` prints `podman version ...`). It runs **rootless** by default. kind can use it:
+Three rules that save the most time:
 
-- `cluster-up` and the capstone `build` script set `KIND_EXPERIMENTAL_PROVIDER=podman` for you
-  when they detect Podman. Set it yourself (`export KIND_EXPERIMENTAL_PROVIDER=podman`) if you run `kind` by hand.
-- **RHEL 8 (and Rocky/Alma/CentOS 8) default to cgroup v1**, and kind refuses rootless mode on
-  cgroup v1 (`running kind with rootless provider requires cgroup v2`). RHEL 9 and later use v2.
-  Switching RHEL 8 to v2 needs a kernel boot setting and a reboot:
-  ```bash
-  sudo grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
-  sudo reboot
-  ```
-  Afterwards, run `./scripts/check-prereqs.sh` again. RHEL 8's systemd is older than 252, so you'll
-  most likely also need the **delegation** step from the rootless section above (the checker tells you).
-- **On a company-managed machine, ask before changing boot settings.** It affects other software
-  on the machine, and IT may manage those settings centrally. If that's not possible, practical
-  alternatives are: a machine with Docker Desktop (Windows/macOS), a RHEL 9+ or Ubuntu VM, or a
-  small cloud VM.
+1. **Never run the scripts with `sudo`.** That creates the cluster in root's engine with root's
+   kubeconfig, and your own user then sees nothing.
+2. **After changing a systemd or sysctl setting, reboot.** "Log out and in again" isn't enough
+   while any other session (SSH, VS Code remote, tmux) is still open.
+3. **Run `loginctl enable-linger`**, or the whole cluster stops when you log out.
 
-**Still failing on cgroup v2?** These are the known rootless-Podman problems, from
-[kind's rootless guide](https://kind.sigs.k8s.io/docs/user/rootless/):
+**[The full list of rootless failures, causes and fixes is in rootless.md](rootless.md)**: 35
+of them, each marked with whether the scripts catch it. It also says plainly when rootless isn't
+worth the fight (RHEL 8 in particular) and what to use instead.
 
-| kind error contains | Fix |
-|---|---|
-| `requires setting systemd property "Delegate=yes"` | Set up delegation (rootless section above). **Then log out of *every* session, or reboot.** Your user's systemd instance keeps the old settings while any session (SSH, VS Code remote, a second terminal login) is open, so closing one terminal isn't enough. `cluster-up` also starts kind with `systemd-run --scope --user -p Delegate=yes`, which kind's docs recommend for rootless Podman |
-| `could not find a log line that matches "Reached target ...` | Rootless Podman's log relay misses the node's boot message. Switch the log driver: `mkdir -p ~/.config/containers && printf '[containers]\nlog_driver = "k8s-file"\n' >> ~/.config/containers/containers.conf`, then re-run `cluster-up` |
-| Pods failing with "too many open files" | Raise inotify limits: create `/etc/sysctl.d/99-kind.conf` with `fs.inotify.max_user_watches = 524288` and `fs.inotify.max_user_instances = 512`, then `sudo sysctl --system` |
+**On your own machine, normal ("rootful") Docker is simpler.** To switch back from rootless
+Docker: `dockerd-rootless-setuptool.sh uninstall`, install Docker as in step 1 above, then
+`docker context use default`.
 
-`cluster-up` recognises the first two errors and prints the matching fix.
-
-The course is tested with Docker. kind's Podman support is labelled *experimental* by kind itself,
-so if something behaves differently under Podman, tell whoever maintains this repo.
+The course's CI runs on ordinary Docker and on rootless Podman (Ubuntu). kind's Podman support
+is labelled *experimental* by kind itself.
 
 ### Corporate proxy: trusting a custom root CA inside kind nodes
 
