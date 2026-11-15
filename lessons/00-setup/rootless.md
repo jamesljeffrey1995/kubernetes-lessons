@@ -94,7 +94,7 @@ while writing this course.
 | 28 | Same error, `pids_limit` is fine | Your user's process limit (`ulimit -u`). Every process in every Pod runs under your user ID | Admin raises `nproc` in `/etc/security/limits.d/` | ! nproc | reported |
 | 29 | Pods report `too many open files` | inotify limits (row 17b) | Raise them | · inotify, hint | kind |
 | 30 | `ErrImageNeverPull` / `ImagePullBackOff` for `pulse:v1` in the capstone | `kind load docker-image` always calls the `docker` binary, and Podman names local images `localhost/pulse`, which Kubernetes doesn't look for | Use `capstone/scripts/build.sh`: it builds `docker.io/library/pulse`, saves a tar and uses `kind load image-archive` | handled | kind |
-| 31 | NetworkPolicy lesson: the "intruder" isn't blocked | Policy enforcement needs kernel features the rootless node may not be able to set up | No reliable fix. Carry on: the capstone demo prints a warning and continues, and `tests/lessons-test.sh` accepts `SKIP_NETPOL=1` | docs | reported |
+| 31 | NetworkPolicy lesson: the "intruder" isn't blocked | Policy enforcement happens inside the node and needs kernel support (nftables) that a rootless node can't load by itself | Not seen in this course's rootless CI (Ubuntu 24.04, Podman 4.9), where policies are enforced. If it happens to you, carry on: the capstone demo prints a warning and continues, and `tests/lessons-test.sh` accepts `SKIP_NETPOL=1` | docs | reported |
 | 32 | A lesson says `docker exec` / `docker ps` | Only Podman installed | Type `podman` instead; the arguments are the same | · docker | - |
 
 ### D. Later

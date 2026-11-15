@@ -1,0 +1,199 @@
+# A minimal Prometheus: one Pod, its configuration in a ConfigMap, and the RBAC it needs to
+# discover what to scrape. At work you will meet the same pieces installed by the
+# kube-prometheus-stack Helm chart (plus Grafana and Alertmanager) or run for you by the cloud.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+# Prometheus asks the Kubernetes API "which Pods and nodes exist?" (service discovery) and reads
+# container metrics from every node's kubelet. Both need permission, cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-lessons
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-lessons
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-lessons
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 10s        # how often to collect (15s-60s is normal; 10s keeps the lesson quick)
+      evaluation_interval: 10s    # how often to evaluate alert rules
+    rule_files:
+      - /etc/prometheus/alerts.yml
+
+    scrape_configs:
+      # 1) Application metrics. Any Pod, in any namespace, that carries the annotation
+      #    prometheus.io/scrape: "true" is scraped on the port named in prometheus.io/port.
+      #    This "annotate your Pod and you're monitored" convention is common; the other
+      #    common one is a ServiceMonitor object (Prometheus Operator).
+      - job_name: pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            regex: (.+);(\d+)
+            target_label: __address__
+            replacement: $1:$2
+          # Turn Kubernetes facts into labels you can filter and group by in queries.
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+
+      # 2) Container metrics (CPU, memory, restarts' cause) for EVERY container in the cluster,
+      #    from the kubelet on each node. The app doesn't have to do anything for these.
+      - job_name: containers
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        kubernetes_sd_configs:
+          - role: node
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          insecure_skip_verify: true    # kind's kubelets use self-signed certificates
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+
+  alerts.yml: |
+    groups:
+      - name: lessons
+        rules:
+          # "More than 5% of requests to an app have failed for 30 seconds."
+          # An alert on what USERS experience, not on a cause like high CPU.
+          - alert: HighErrorRate
+            expr: |
+              sum by (namespace, app) (rate(http_request_duration_seconds_count{status=~"5.."}[1m]))
+                /
+              sum by (namespace, app) (rate(http_request_duration_seconds_count[1m]))
+                > 0.05
+            for: 30s
+            labels:
+              severity: page
+            annotations:
+              summary: "{{ $labels.app }} in {{ $labels.namespace }}: {{ $value | humanizePercentage }} of requests are failing"
+          # "A container is using more than 90% of its memory limit" - about to be OOMKilled (lesson 09).
+          - alert: MemoryNearLimit
+            expr: |
+              container_memory_working_set_bytes{container!=""}
+                / (container_spec_memory_limit_bytes{container!=""} > 0)
+                > 0.9
+            for: 1m
+            labels:
+              severity: ticket
+            annotations:
+              summary: "{{ $labels.pod }}/{{ $labels.container }} is at {{ $value | humanizePercentage }} of its memory limit"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.7.3
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=2h    # a lesson, not a monitoring system: keep 2 hours
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 200Mi
+            limits:
+              memory: 500Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}                # metrics are lost when the Pod restarts. Real setups use a PVC
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+# Reach the Prometheus UI at http://prometheus.localhost:8080 through the gateway (lesson 10).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  parentRefs:
+    - name: main
+      namespace: traefik
+  hostnames: ["prometheus.localhost"]
+  rules:
+    - backendRefs:
+        - name: prometheus
+          port: 9090

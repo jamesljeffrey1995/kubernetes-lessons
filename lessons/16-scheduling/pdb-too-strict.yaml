@@ -1,0 +1,12 @@
+# The classic mistake: minAvailable equal to the number of replicas (or maxUnavailable: 0).
+# It allows ZERO evictions, so no node running one of these Pods can ever be drained,
+# and cluster upgrades hang on it.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: spread
+spec:
+  minAvailable: 4
+  selector:
+    matchLabels:
+      app: spread

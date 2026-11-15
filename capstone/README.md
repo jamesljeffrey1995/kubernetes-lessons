@@ -1,4 +1,4 @@
-# Lesson 15 / Capstone: Pulse, a production-style app you can demo at work
+# Capstone: Pulse, a production-style app you can demo at work
 
 **Time:** 1-2 hours to build and understand, 15 minutes to present.
 
@@ -40,7 +40,7 @@ Your cluster from lesson 00 must be running (`./scripts/cluster-up.sh` / `.\scri
 
 **bash:**
 ```bash
-./capstone/scripts/build.sh      # docker build pulse:v1 and pulse:v2, kind load into the cluster
+./capstone/scripts/build.sh      # build pulse:v1 and pulse:v2 (Docker or Podman), load them into the cluster
 ./capstone/scripts/deploy.sh     # namespace + helm upgrade --install + helm test
 ```
 
@@ -58,6 +58,10 @@ Each coloured tile is a Pod. The big panel shows which Pod answered the latest r
 Why `kind load`? kind's nodes are containers with their own image store; they can't see images
 you built on your machine. On a real cluster you'd push to a registry (ECR, ACR, GHCR, Harbor)
 instead, and the chart's `image.repository` would point there.
+
+The script saves each image to a tar file and uses `kind load image-archive`, not the better-known
+`kind load docker-image`. The latter always calls the `docker` program, so it fails with Podman,
+and Podman would name the image `localhost/pulse`, which Kubernetes never looks for.
 
 ## 2. Run the guided demo
 

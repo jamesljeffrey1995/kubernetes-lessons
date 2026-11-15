@@ -1,0 +1,30 @@
+# A change with two mistakes that 'kubectl apply' would accept the YAML syntax of.
+# Find them with --dry-run=server BEFORE applying.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: team-payments
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: api
+          image: traefik/whoami:v1.11.0
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi          # mistake 1: the request is larger than the limit below
+            limits:
+              memory: 48Mi
+          imagePullPolicy: Sometimes  # mistake 2: not a valid value (Always, IfNotPresent, Never)

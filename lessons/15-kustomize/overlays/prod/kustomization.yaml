@@ -1,0 +1,46 @@
+# The PROD overlay: more replicas, bigger resources, a pinned image tag, spread over nodes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shop-prod
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+labels:
+  - pairs:
+      environment: prod
+    includeTemplates: true
+
+configMapGenerator:
+  - name: whoami-config
+    behavior: merge
+    literals:
+      - WHOAMI_NAME=prod
+
+replicas:
+  - name: whoami
+    count: 3
+
+# What a CI pipeline changes on every release:  kustomize edit set image traefik/whoami:<new tag>
+images:
+  - name: traefik/whoami
+    newTag: v1.11.0
+
+patches:
+  - path: resources-patch.yaml
+  # An inline JSON patch, for surgical changes a merge patch can't express (here: add one item).
+  - target:
+      kind: Deployment
+      name: whoami
+    patch: |-
+      - op: add
+        path: /spec/template/spec/topologySpreadConstraints
+        value:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app: whoami

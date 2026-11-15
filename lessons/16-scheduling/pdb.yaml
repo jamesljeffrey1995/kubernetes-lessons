@@ -1,0 +1,11 @@
+# "During planned maintenance, never take 'spread' below 3 ready Pods."
+# With 4 replicas that leaves room to evict exactly one Pod at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: spread
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: spread

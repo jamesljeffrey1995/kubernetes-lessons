@@ -1,0 +1,27 @@
+# An "incident": a client that keeps hitting an endpoint which answers HTTP 500.
+# About 5 failing requests per second on top of the healthy traffic.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: errors
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: errors
+  template:
+    metadata:
+      labels:
+        app: errors
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: curl
+          image: curlimages/curl:8.17.0
+          command: ["sh", "-c", "while true; do curl -s -o /dev/null -m 2 http://shop/status/500; sleep 0.2; done"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

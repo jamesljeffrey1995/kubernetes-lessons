@@ -50,6 +50,14 @@ jobs:
           helm lint capstone/chart/pulse
           helm lint capstone/chart/pulse -f capstone/values-v2.yaml -f capstone/values-autoscale.yaml
 
+      - name: Kustomize overlays render
+        run: |
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && chmod +x kubectl
+          for overlay in lessons/15-kustomize/base lessons/15-kustomize/overlays/*/; do
+            ./kubectl kustomize "$overlay" > /dev/null && echo "ok $overlay"
+          done
+          rm kubectl
+
       - name: ShellCheck
         run: shellcheck scripts/*.sh capstone/scripts/*.sh tests/*.sh
 
@@ -124,7 +132,7 @@ jobs:
           kubectl -n kube-system rollout status deploy/metrics-server --timeout=180s
           for i in $(seq 1 30); do kubectl top nodes && break; sleep 5; done
 
-      - name: Lessons 03-14
+      - name: Lessons 03-20
         if: matrix.shell == 'bash'
         run: ./tests/lessons-test.sh
 
@@ -212,7 +220,7 @@ jobs:
 
       - name: Lessons that depend most on the host (networking, storage, limits, gateway, security)
         env:
-          ONLY: "05 08 09 10 12"
+          ONLY: "05 08 09 10 12 16 17 19 20"
         run: ./tests/lessons-test.sh
 
       - name: Capstone - build with Podman, load into kind, deploy

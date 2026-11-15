@@ -1,0 +1,29 @@
+# An app that may only run on nodes labelled disktype=ssd. No node has that label yet,
+# so the Pod stays Pending until you label one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ssd-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ssd-app
+  template:
+    metadata:
+      labels:
+        app: ssd-app
+    spec:
+      terminationGracePeriodSeconds: 1
+      nodeSelector:
+        disktype: ssd
+      containers:
+        - name: app
+          image: busybox:1.37
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              memory: 16Mi

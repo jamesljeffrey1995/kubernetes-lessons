@@ -1,0 +1,9 @@
+# A Website. Seven lines instead of a Deployment + Service + ConfigMap: that is the point of
+# an operator - users state WHAT they want in the vocabulary of their problem.
+apiVersion: lessons.example.com/v1
+kind: Website
+metadata:
+  name: hello
+spec:
+  title: Hello from a custom resource
+  replicas: 2
