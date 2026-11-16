@@ -1,0 +1,28 @@
+# The team's app, as it is running today.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: team-payments
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: api
+          image: traefik/whoami:v1.11.0
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

@@ -1,0 +1,40 @@
+# A rule of the house, enforced by the API server itself: in namespaces labelled
+# policy=strict, every Deployment must say which team owns it.
+#
+# ValidatingAdmissionPolicy is built into Kubernetes (stable since 1.30). No extra software.
+# The older, still very common way to do this is a policy engine: Kyverno or OPA Gatekeeper.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: require-team-label
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  validations:
+    - expression: "has(object.metadata.labels) && 'team' in object.metadata.labels"
+      message: "Deployments in this namespace must have a 'team' label, so we know who to call."
+---
+# A policy does nothing until a BINDING says where it applies and what a violation does.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: require-team-label
+spec:
+  policyName: require-team-label
+  validationActions: ["Deny"]        # "Warn" and "Audit" let you roll a rule out gently first
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        policy: strict
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: strict-team
+  labels:
+    policy: strict

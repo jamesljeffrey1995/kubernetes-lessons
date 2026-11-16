@@ -251,4 +251,6 @@ and your Git log are the first places to look.
 
 ---
 
-**Next:** [Lesson 15: Capstone project](../../capstone/README.md)
+**Next:** the [Capstone project](../../capstone/README.md) puts lessons 00-14 together. Or
+continue with the lessons about working in a company, starting at
+[Lesson 15: Kustomize](../15-kustomize/README.md).

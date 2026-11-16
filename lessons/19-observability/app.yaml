@@ -1,0 +1,47 @@
+# The app to observe: podinfo, a small demo web service that publishes Prometheus metrics on
+# /metrics. Open http://<pod>:9898/metrics to see the raw text Prometheus collects.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shop
+  template:
+    metadata:
+      labels:
+        app: shop
+      annotations:
+        prometheus.io/scrape: "true"      # "please scrape me" - see the 'pods' job in prometheus.yaml
+        prometheus.io/port: "9898"
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: podinfo
+          image: stefanprodan/podinfo:6.9.2
+          ports:
+            - name: http
+              containerPort: 9898
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop
+spec:
+  selector:
+    app: shop
+  ports:
+    - port: 80
+      targetPort: http

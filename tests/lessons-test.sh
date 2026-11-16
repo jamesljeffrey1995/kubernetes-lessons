@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check of the lessons: applies each lesson's manifests to the "lessons" cluster
 # and verifies the behaviour the lesson describes actually happens. Used by CI; you can run it
-# yourself after ./scripts/cluster-up.sh (it takes ~10 minutes and cleans up after itself).
+# yourself after ./scripts/cluster-up.sh (it takes ~15 minutes and cleans up after itself).
 #
 # Options (env vars):  ONLY="05 10"     run only these lessons
 #                      SKIP_NETPOL=1    skip NetworkPolicy enforcement checks
@@ -197,6 +197,151 @@ if want 14; then
   retry 60 "#6 payments: readiness 404" sh -c "kubectl get events -n broken | grep -q 'statuscode: 404'"
   retry 60 "#7 emails: missing ConfigMap key" sh -c "kubectl get events -n broken | grep -q 'couldn.t find key SMTP_SERVER'"
   kubectl delete namespace broken --wait=false >/dev/null
+fi
+
+if want 15; then
+  step "15 kustomize"
+  kubectl apply -k $L/15-kustomize/overlays/dev >/dev/null
+  kubectl apply -k $L/15-kustomize/overlays/prod >/dev/null
+  kubectl -n shop-dev rollout status deploy/whoami --timeout=120s >/dev/null
+  kubectl -n shop-prod rollout status deploy/whoami --timeout=120s >/dev/null
+  retry 30 "dev overlay: its own name, from a generated ConfigMap" sh -c "kubectl exec toolbox -- curl -sf http://whoami.shop-dev | grep -qx 'Name: dev'"
+  retry 30 "prod overlay: its own name" sh -c "kubectl exec toolbox -- curl -sf http://whoami.shop-prod | grep -qx 'Name: prod'"
+  if [ "$(kubectl -n shop-prod get deploy whoami -o jsonpath='{.spec.replicas}/{.spec.template.spec.containers[0].resources.limits.memory}')" = "3/64Mi" ]; then ok "prod overlay: 3 replicas and patched resources"; else die "prod overlay: 3 replicas and patched resources"; fi
+  if kubectl -n shop-prod get deploy whoami -o jsonpath='{.spec.template.spec.containers[0].envFrom[0].configMapRef.name}' | grep -qE '^whoami-config-[a-z0-9]{10}$'; then ok "ConfigMap name carries a content hash"; else die "ConfigMap name carries a content hash"; fi
+  kubectl delete -k $L/15-kustomize/overlays/dev --wait=false >/dev/null
+  kubectl delete -k $L/15-kustomize/overlays/prod --wait=false >/dev/null
+fi
+
+if want 16; then
+  step "16 scheduling & node maintenance"
+  on_node() { kubectl get pods -l "app=$1" --field-selector "spec.nodeName=$2,status.phase=Running" -o name | wc -l | tr -d ' '; }
+  kubectl apply -f $L/16-scheduling/spread.yaml >/dev/null
+  kubectl rollout status deploy/spread --timeout=120s >/dev/null
+  if [ "$(on_node spread lessons-worker)/$(on_node spread lessons-worker2)" = "2/2" ]; then ok "topology spread: 2 Pods on each worker"; else kubectl get pods -l app=spread -o wide; die "topology spread: 2 Pods on each worker"; fi
+  kubectl apply -f $L/16-scheduling/pinned.yaml >/dev/null
+  retry 30 "nodeSelector without a matching node: Pending" sh -c "kubectl get events | grep -q \"didn't match Pod's node affinity/selector\""
+  kubectl label node lessons-worker disktype=ssd --overwrite >/dev/null
+  kubectl rollout status deploy/ssd-app --timeout=60s >/dev/null
+  if [ "$(on_node ssd-app lessons-worker)" = "1" ]; then ok "labelling a node lets the Pod schedule there"; else die "labelling a node lets the Pod schedule there"; fi
+  kubectl taint nodes lessons-worker2 dedicated=batch:NoSchedule --overwrite >/dev/null
+  kubectl label node lessons-worker2 dedicated=batch --overwrite >/dev/null
+  kubectl apply -f $L/16-scheduling/batch.yaml >/dev/null
+  kubectl rollout status deploy/batch --timeout=60s >/dev/null
+  if [ "$(on_node batch lessons-worker2)" = "2" ]; then ok "toleration + nodeSelector: batch runs on the tainted node"; else die "toleration + nodeSelector: batch runs on the tainted node"; fi
+  kubectl delete -f $L/16-scheduling/batch.yaml -f $L/16-scheduling/pinned.yaml >/dev/null
+  kubectl taint nodes lessons-worker2 dedicated=batch:NoSchedule- >/dev/null
+  kubectl label node lessons-worker2 dedicated- >/dev/null
+  kubectl label node lessons-worker disktype- >/dev/null
+  kubectl apply -f $L/16-scheduling/pdb-too-strict.yaml >/dev/null
+  if kubectl drain lessons-worker2 --ignore-daemonsets --delete-emptydir-data --force --timeout=20s >/dev/null 2>&1; then
+    die "a PDB that allows no disruptions should block the drain"
+  fi
+  ok "PDB with minAvailable = replicas blocks the drain"
+  kubectl apply -f $L/16-scheduling/pdb.yaml >/dev/null
+  if kubectl drain lessons-worker2 --ignore-daemonsets --delete-emptydir-data --force --timeout=180s >/dev/null 2>&1; then ok "drain succeeds with a PDB that allows one disruption"; else kubectl get pods -o wide; die "drain succeeds with a PDB that allows one disruption"; fi
+  retry 60 "all 4 Pods moved to the other worker" sh -c "[ \"\$(kubectl get pods -l app=spread --field-selector spec.nodeName=lessons-worker,status.phase=Running -o name | wc -l | tr -d ' ')\" = 4 ]"
+  kubectl uncordon lessons-worker2 >/dev/null
+  kubectl delete -f $L/16-scheduling/spread.yaml -f $L/16-scheduling/pdb.yaml >/dev/null
+  # The drain used --force, which deletes bare Pods such as the toolbox.
+  kubectl apply -f $L/tools/toolbox.yaml >/dev/null
+  kubectl wait --for=condition=Ready pod/toolbox --timeout=120s >/dev/null
+fi
+
+if want 17; then
+  step "17 debugging"
+  kubectl apply -f $L/17-debugging/apps.yaml >/dev/null
+  kubectl rollout status deploy/minimal --timeout=120s >/dev/null
+  POD=$(kubectl get pod -l app=minimal -o jsonpath='{.items[0].metadata.name}')
+  if kubectl exec "$POD" -- sh -c true >/dev/null 2>&1; then die "the minimal image should have no shell"; fi
+  ok "exec fails: the image has no shell"
+  kubectl debug "$POD" --image=busybox:1.37 --target=app --container=probe -- wget -qO- http://localhost:8080 >/dev/null
+  retry 90 "ephemeral container reaches the app on localhost" sh -c "kubectl logs $POD -c probe | grep -q Hostname"
+  kubectl debug "$POD" --image=busybox:1.37 --target=app --container=probe2 -- ls /proc/1/root/whoami >/dev/null
+  retry 90 "ephemeral container sees the app's filesystem" sh -c "kubectl logs $POD -c probe2 | grep -q whoami"
+  retry 90 "crasher logs why it crashes" sh -c "kubectl logs crasher 2>/dev/null | grep -q FATAL || kubectl logs crasher --previous 2>/dev/null | grep -q FATAL"
+  kubectl debug crasher --copy-to=crasher-debug --container=app -- sleep 3600 >/dev/null
+  if kubectl wait --for=condition=Ready pod/crasher-debug --timeout=90s >/dev/null; then ok "copy of the crashing Pod stays up with another command"; else die "copy of the crashing Pod stays up with another command"; fi
+  kubectl debug node/lessons-worker --image=busybox:1.37 -- cat /host/etc/hostname >/dev/null
+  retry 90 "node debug Pod reads the node's filesystem" sh -c "kubectl logs \$(kubectl get pods -o name | grep node-debugger | head -n 1) | grep -qx lessons-worker"
+  kubectl get pods -o name | grep node-debugger | xargs -r kubectl delete --wait=false >/dev/null
+  kubectl delete pod crasher-debug --wait=false >/dev/null
+  kubectl delete -f $L/17-debugging/apps.yaml --wait=false >/dev/null
+fi
+
+if want 18; then
+  step "18 shared clusters"
+  kubectl apply -f $L/18-shared-clusters/team.yaml -f $L/18-shared-clusters/app.yaml >/dev/null
+  kubectl -n team-payments rollout status deploy/api --timeout=120s >/dev/null
+  TOKEN=$(kubectl create token developer -n team-payments --duration=1h)
+  kubectl config set-credentials payments-dev --token="$TOKEN" >/dev/null
+  kubectl config set-context payments-dev --cluster=kind-lessons --user=payments-dev --namespace=team-payments >/dev/null
+  dev() { kubectl --context payments-dev "$@"; }
+  if dev auth whoami | grep -q 'system:serviceaccount:team-payments:developer'; then ok "context switches identity"; else die "context switches identity"; fi
+  if dev get pods >/dev/null; then ok "developer can list Pods in their namespace"; else die "developer can list Pods in their namespace"; fi
+  if dev get secrets >/dev/null 2>&1; then die "developer must not read Secrets"; fi
+  ok "developer cannot read Secrets"
+  if dev get pods -n kube-system >/dev/null 2>&1; then die "developer must not see other namespaces"; fi
+  ok "developer cannot see other namespaces"
+  if command -v diff >/dev/null; then
+    rc=0; dev diff -f $L/18-shared-clusters/app-change.yaml >/dev/null 2>&1 || rc=$?
+    if [ "$rc" = "1" ]; then ok "kubectl diff reports the pending change"; else die "kubectl diff should exit 1 (differences), got $rc"; fi
+  fi
+  OUT=$(dev apply --dry-run=server -f $L/18-shared-clusters/app-broken.yaml 2>&1 || true)
+  if grep -q 'must be less than or equal to memory limit' <<<"$OUT" && grep -q 'Sometimes' <<<"$OUT"; then ok "server-side dry-run catches both mistakes"; else echo "$OUT"; die "server-side dry-run catches both mistakes"; fi
+  dev apply -f $L/18-shared-clusters/app-change.yaml >/dev/null
+  if dev rollout status deploy/api --timeout=120s >/dev/null; then ok "developer can deploy a change"; else die "developer can deploy a change"; fi
+  dev scale deploy/api --replicas=8 >/dev/null
+  retry 60 "ResourceQuota stops the namespace at 6 Pods" sh -c "kubectl get events -n team-payments | grep -q 'exceeded quota'"
+  kubectl config delete-context payments-dev >/dev/null
+  kubectl config unset users.payments-dev >/dev/null
+  kubectl delete namespace team-payments --wait=false >/dev/null
+fi
+
+if want 19; then
+  step "19 observability"
+  prom_has() { kubectl exec toolbox -- curl -s -m 5 -G --data-urlencode "query=$1" http://prometheus.monitoring:9090/api/v1/query | grep -q -- "$2"; }
+  kubectl apply -f $L/19-observability/prometheus.yaml >/dev/null
+  kubectl apply -f $L/19-observability/app.yaml -f $L/19-observability/traffic.yaml >/dev/null
+  kubectl -n monitoring rollout status deploy/prometheus --timeout=180s >/dev/null
+  kubectl rollout status deploy/shop --timeout=120s >/dev/null
+  retry 120 "Prometheus discovers both annotated Pods" prom_has 'count(up{job="pods",app="shop"} == 1)' '"2"\]'
+  retry 120 "kubelet container metrics for all 3 nodes" prom_has 'count(up{job="containers"} == 1)' '"3"\]'
+  retry 120 "request rate is measured" prom_has 'sum(rate(http_request_duration_seconds_count{app="shop",status="200"}[1m])) > 1' '"result":\[{'
+  retry 120 "memory per container is measured" prom_has 'count(container_memory_working_set_bytes{namespace="default",container="podinfo"})' '"2"\]'
+  retry 60 "UI reachable through the gateway" sh -c "curl --noproxy '*' -s -m 5 -H 'Host: prometheus.localhost' http://127.0.0.1:8080/-/ready | grep -q Ready"
+  if prom_has 'ALERTS{alertname="HighErrorRate",alertstate="firing"}' '"result":\[{'; then die "alert must not fire before the incident"; fi
+  kubectl apply -f $L/19-observability/errors.yaml >/dev/null
+  retry 240 "HighErrorRate alert fires during the incident" prom_has 'ALERTS{alertname="HighErrorRate",alertstate="firing"}' '"result":\[{'
+  kubectl delete -f $L/19-observability/errors.yaml -f $L/19-observability/traffic.yaml -f $L/19-observability/app.yaml --wait=false >/dev/null
+  kubectl delete -f $L/19-observability/prometheus.yaml --wait=false >/dev/null
+fi
+
+if want 20; then
+  step "20 CRDs, operators & policies"
+  kubectl apply -f $L/20-extending/crd.yaml >/dev/null
+  kubectl wait --for=condition=Established crd/websites.lessons.example.com --timeout=60s >/dev/null
+  OUT=$(kubectl apply -f $L/20-extending/website-invalid.yaml 2>&1 || true)
+  if grep -q 'less than or equal to 5' <<<"$OUT"; then ok "CRD schema rejects an invalid Website"; else echo "$OUT"; die "CRD schema rejects an invalid Website"; fi
+  kubectl apply -f $L/20-extending/website.yaml >/dev/null
+  if [ -z "$(kubectl get deploy -l app=website -o name)" ]; then ok "without a controller, a Website is only data"; else die "without a controller, a Website is only data"; fi
+  kubectl apply -f $L/20-extending/operator.yaml >/dev/null
+  kubectl -n website-operator rollout status deploy/website-operator --timeout=180s >/dev/null
+  retry 120 "operator creates the Deployment" kubectl rollout status deploy/site-hello --timeout=5s
+  retry 60 "the site serves the Website's title" sh -c "kubectl exec toolbox -- curl -sf http://site-hello | grep -q 'Hello from a custom resource'"
+  retry 60 "operator reports status on the Website" sh -c "[ \"\$(kubectl get website hello -o jsonpath='{.status.readyReplicas}')\" = 2 ]"
+  kubectl delete deployment site-hello >/dev/null
+  retry 60 "operator recreates a deleted Deployment" kubectl get deployment site-hello
+  kubectl delete website hello >/dev/null
+  retry 60 "deleting the Website garbage-collects what it owned" sh -c "! kubectl get deployment site-hello"
+  kubectl apply -f $L/20-extending/policy.yaml >/dev/null
+  retry 60 "admission policy denies an unlabelled Deployment" sh -c "kubectl apply --dry-run=server -f $L/20-extending/deploy-unlabelled.yaml 2>&1 | grep -q 'must have a .team. label'"
+  if kubectl apply -f $L/20-extending/deploy-labelled.yaml >/dev/null; then ok "labelled Deployment is admitted"; else die "labelled Deployment is admitted"; fi
+  kubectl delete namespace strict-team --wait=false >/dev/null
+  kubectl delete validatingadmissionpolicybinding require-team-label >/dev/null
+  kubectl delete validatingadmissionpolicy require-team-label >/dev/null
+  kubectl delete -f $L/20-extending/operator.yaml --wait=false >/dev/null
+  kubectl delete -f $L/20-extending/crd.yaml --wait=false >/dev/null
 fi
 
 printf '\n\033[1;32mAll lesson checks passed (%d checks).\033[0m\n' "$PASS"

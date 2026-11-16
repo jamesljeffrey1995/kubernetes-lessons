@@ -1,0 +1,26 @@
+# A perfectly valid Deployment - which the policy in policy.yaml refuses, because it has no 'team' label.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: strict-team
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: nginx
+          image: nginx:1.29-alpine
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

@@ -1,0 +1,17 @@
+# A strategic-merge patch: a FRAGMENT of a Deployment. Kustomize finds the object with this
+# kind + name and merges the fragment in; containers are matched by name.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami
+spec:
+  template:
+    spec:
+      containers:
+        - name: whoami
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 64Mi

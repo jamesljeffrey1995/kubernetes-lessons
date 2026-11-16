@@ -1,0 +1,8 @@
+# Rejected by the API server before anything is stored: the schema in crd.yaml allows 1-5 replicas.
+apiVersion: lessons.example.com/v1
+kind: Website
+metadata:
+  name: too-big
+spec:
+  title: This one asks for too much
+  replicas: 9

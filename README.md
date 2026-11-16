@@ -12,7 +12,7 @@ capstone demo on each change ([`.github/workflows/ci.yml`](.github/workflows/ci.
 
 | # | Lesson | You'll be able to... |
 |---|---|---|
-| 00 | [Set up your machine](lessons/00-setup/README.md) | Install Docker, kind, kubectl and Helm; create a 3-node cluster |
+| 00 | [Set up your machine](lessons/00-setup/README.md) | Install Docker (or use Podman), kind, kubectl and Helm; create a 3-node cluster |
 | 01 | [What Kubernetes actually is](lessons/01-concepts/README.md) | Explain desired state, control loops and the architecture |
 | 02 | [kubectl basics](lessons/02-kubectl-basics/README.md) | Find out what's running and why: `get`, `describe`, `logs`, `explain` |
 | 03 | [Pods](lessons/03-pods/README.md) | Run containers from YAML; exec, port-forward, sidecars, init containers |
@@ -27,10 +27,20 @@ capstone demo on each change ([`.github/workflows/ci.yml`](.github/workflows/ci.
 | 12 | [Security](lessons/12-security/README.md) | RBAC, Pod Security Standards, security contexts, NetworkPolicies |
 | 13 | [Jobs, CronJobs, autoscaling](lessons/13-jobs-autoscaling/README.md) | Batch work, schedules, the HorizontalPodAutoscaler |
 | 14 | [Troubleshooting](lessons/14-troubleshooting/README.md) | A repeatable method, practised on 7 realistic broken apps |
-| 15 | [**Capstone: Pulse**](capstone/README.md) | Build, deploy and **present** a production-style app |
+| 15 | [Kustomize](lessons/15-kustomize/README.md) | Deploy one app to dev and prod without templates; know when to use it instead of Helm |
+| 16 | [Scheduling and node maintenance](lessons/16-scheduling/README.md) | Control where Pods run; survive node drains and upgrades with PodDisruptionBudgets |
+| 17 | [Debugging running workloads](lessons/17-debugging/README.md) | Investigate images with no shell, crashing containers and nodes with `kubectl debug` |
+| 18 | [Working on shared clusters](lessons/18-shared-clusters/README.md) | Use a limited-access kubeconfig, read `Forbidden` errors, change things safely (`diff`, dry-run) |
+| 19 | [Observability with Prometheus](lessons/19-observability/README.md) | Query request rates, errors, latency and resource use; write an alert on what users feel |
+| 20 | [CRDs, operators and policies](lessons/20-extending/README.md) | Understand the custom resources every real cluster is full of; admission policies |
+| ★ | [**Capstone: Pulse**](capstone/README.md) | Build, deploy and **present** a production-style app |
 
-Budget roughly **12-16 hours** for lessons 00-14, at your own pace. Each lesson has exercises
-with hidden answers. Try them before peeking.
+Budget roughly **12-16 hours** for lessons 00-14 and another **5 hours** for 15-20, at your own
+pace. Each lesson has exercises with hidden answers. Try them before peeking.
+
+Lessons 00-14 are the foundation, in order. **Lessons 15-20 are about working in a company**:
+shared clusters, limited permissions, other people's tooling, production habits. They are
+independent of each other, so take them in any order, before or after the capstone.
 
 ## Quick start
 
@@ -82,10 +92,10 @@ answers to the questions colleagues tend to ask.
 ## Repository layout
 
 ```
-lessons/            00-14, each with a README and the YAML it uses
+lessons/            00-20, each with a README and the YAML it uses
 lessons/tools/      the 'toolbox' Pod used to test things from inside the cluster
 platform/           kind cluster config + pinned Gateway API CRDs, Traefik, metrics-server
-scripts/            check-prereqs, cluster-up, cluster-down (.sh and .ps1)
+scripts/            check-prereqs, cluster-up, cluster-down (.sh and .ps1), engine (Docker/Podman detection)
 capstone/           the Pulse app, its Helm chart, and demo scripts
 tests/              end-to-end checks run by CI (lessons + zero-downtime proof)
 ```
@@ -100,6 +110,8 @@ tests/              end-to-end checks run by CI (lessons + zero-downtime proof)
 | Gateway API | v1.6.3 standard channel | pinned to match Traefik 3.7 |
 | Traefik | v3.7.18 | replaces ingress-nginx, which was retired in March 2026 |
 | metrics-server | v0.9.1 | |
+| Prometheus | v3.7.3 | lesson 19 only |
+| Docker Engine or Podman 4+ | | CI runs rootful Docker and rootless Podman |
 
 The platform manifests are vendored (copied into [`platform/`](platform/)) and pinned, so the course
 doesn't break when upstream releases something new. To upgrade, replace those files deliberately.
@@ -107,5 +119,6 @@ doesn't break when upstream releases something new. To upgrade, replace those fi
 ## When something goes wrong
 
 1. Check the troubleshooting table in [lesson 00](lessons/00-setup/README.md#things-that-go-wrong-at-work-and-fixes) (corporate proxies, VPNs, ports, rate limits).
+   On Red Hat, Podman or rootless Docker, see [rootless.md](lessons/00-setup/rootless.md): every known failure with its fix.
 2. Use the method from [lesson 14](lessons/14-troubleshooting/README.md).
 3. Still stuck? Delete and recreate the cluster: `./scripts/cluster-down.sh && ./scripts/cluster-up.sh`. It takes two minutes and fixes more than you'd expect.

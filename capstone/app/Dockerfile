@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ---- build stage: compile a static Go binary ----
-FROM golang:1.26-alpine AS build
+FROM docker.io/library/golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./

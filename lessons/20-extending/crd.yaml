@@ -1,0 +1,69 @@
+# A CustomResourceDefinition teaches the API server a new kind of object: "Website".
+# After this is applied, 'kubectl get websites' works like 'kubectl get pods' - storage,
+# validation, RBAC, 'kubectl explain' and 'kubectl get -w' all come for free.
+# On its own it only STORES Websites. Something has to act on them: see operator.yaml.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: websites.lessons.example.com        # must be <plural>.<group>
+spec:
+  group: lessons.example.com
+  scope: Namespaced
+  names:
+    kind: Website
+    plural: websites
+    singular: website
+    shortNames: ["web"]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}                          # .status is written separately from .spec (by the operator)
+      additionalPrinterColumns:             # the columns 'kubectl get websites' shows
+        - name: Title
+          type: string
+          jsonPath: .spec.title
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyReplicas
+        - name: URL
+          type: string
+          jsonPath: .status.url
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["title"]
+              properties:
+                title:
+                  type: string
+                  description: Text shown on the site's page.
+                  minLength: 1
+                  maxLength: 60
+                replicas:
+                  type: integer
+                  description: How many web server Pods to run.
+                  default: 1
+                  minimum: 1
+                  maximum: 5
+                owner:
+                  type: string
+                  description: Team responsible for the site.
+              # A rule across fields, written in CEL (Common Expression Language).
+              x-kubernetes-validations:
+                - rule: "self.replicas <= 2 || has(self.owner)"
+                  message: "sites with more than 2 replicas must name an owner"
+            status:
+              type: object
+              properties:
+                readyReplicas:
+                  type: integer
+                url:
+                  type: string

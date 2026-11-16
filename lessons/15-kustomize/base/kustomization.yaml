@@ -1,0 +1,16 @@
+# The BASE: what every environment has in common. It is plain, valid Kubernetes YAML plus this
+# file, which lists it. You can apply a base on its own:  kubectl apply -k lessons/15-kustomize/base
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# Generates a ConfigMap and appends a hash of its CONTENT to the name (whoami-config-7c2d5tf8mk).
+# Change a value -> new name -> the Deployment's Pod template changes -> Kubernetes rolls the Pods.
+# That fixes lesson 06's problem: editing a ConfigMap does not restart the Pods that use it.
+configMapGenerator:
+  - name: whoami-config
+    literals:
+      - WHOAMI_NAME=base        # traefik/whoami prints this as "Name: ..." in its response

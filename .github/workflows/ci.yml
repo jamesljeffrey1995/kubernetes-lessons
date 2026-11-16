@@ -2,7 +2,8 @@ name: CI
 
 # Proves the course actually works: lints everything, then creates a real kind cluster with the
 # course's own scripts and runs every lesson and the capstone demo against it - once with the
-# bash scripts + Helm 3, once with the PowerShell scripts + Helm 4.
+# bash scripts + Helm 3, once with the PowerShell scripts + Helm 4. A third job repeats the
+# essentials on ROOTLESS PODMAN with no 'docker' command at all, like a Red Hat workstation.
 
 on:
   push:
@@ -48,6 +49,14 @@ jobs:
           helm lint lessons/11-helm/hello
           helm lint capstone/chart/pulse
           helm lint capstone/chart/pulse -f capstone/values-v2.yaml -f capstone/values-autoscale.yaml
+
+      - name: Kustomize overlays render
+        run: |
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && chmod +x kubectl
+          for overlay in lessons/15-kustomize/base lessons/15-kustomize/overlays/*/; do
+            ./kubectl kustomize "$overlay" > /dev/null && echo "ok $overlay"
+          done
+          rm kubectl
 
       - name: ShellCheck
         run: shellcheck scripts/*.sh capstone/scripts/*.sh tests/*.sh
@@ -123,7 +132,7 @@ jobs:
           kubectl -n kube-system rollout status deploy/metrics-server --timeout=180s
           for i in $(seq 1 30); do kubectl top nodes && break; sleep 5; done
 
-      - name: Lessons 03-14
+      - name: Lessons 03-20
         if: matrix.shell == 'bash'
         run: ./tests/lessons-test.sh
 
@@ -156,3 +165,85 @@ jobs:
           kubectl describe pods -n pulse || true
           kubectl logs -n traefik deploy/traefik --tail=50 || true
           kubectl -n kube-system logs ds/kindnet --tail=50 || true
+
+  rootless-podman:
+    name: End-to-end (rootless Podman, no docker command)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.22.1
+
+      - name: Install kind and kubectl
+        run: |
+          curl -fsSLo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kind kubectl /usr/local/bin/
+
+      - name: Make the runner look like a Red Hat workstation (Podman only, rootless)
+        run: |
+          # No Docker: the scripts must cope with 'podman' alone.
+          sudo systemctl stop docker.socket docker.service || true
+          sudo rm -f /usr/bin/docker /usr/local/bin/docker
+          if command -v docker; then echo "docker is still on PATH"; exit 1; fi
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman uidmap slirp4netns passt aardvark-dns netavark fuse-overlayfs
+
+          # A systemd user session that outlives each step (what a real login gives you).
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 1 30); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+
+          # The host settings from lessons/00-setup/rootless.md that this image lacks.
+          sudo modprobe -a ip_tables ip6_tables iptable_nat ip6table_nat fuse
+          sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
+          mkdir -p ~/.config/containers
+          printf '[containers]\nlog_driver = "k8s-file"\npids_limit = 65536\n' > ~/.config/containers/containers.conf
+
+      - name: Show the engine
+        run: |
+          podman version
+          podman info
+          systemctl --version | head -n 1
+          cat "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
+
+      - name: Check prerequisites
+        run: ./scripts/check-prereqs.sh
+
+      - name: Create cluster (scripts/cluster-up.sh)
+        run: ./scripts/cluster-up.sh
+
+      - name: Lessons that depend most on the host (networking, storage, limits, gateway, security)
+        env:
+          ONLY: "05 08 09 10 12 16 17 19 20"
+        run: ./tests/lessons-test.sh
+
+      - name: Capstone - build with Podman, load into kind, deploy
+        run: ./capstone/scripts/build.sh && ./capstone/scripts/deploy.sh
+
+      - name: Capstone - zero-downtime proof
+        run: ./tests/zero-downtime.sh
+
+      - name: Simulate a reboot - stopped nodes must come back with cluster-up
+        run: |
+          podman stop lessons-worker lessons-worker2 lessons-control-plane
+          ./scripts/cluster-up.sh
+          kubectl get nodes
+          kubectl -n pulse rollout status deploy/pulse --timeout=180s
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          podman ps -a || true
+          podman logs --tail 60 lessons-control-plane || true
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl -n kube-system logs ds/kube-proxy --tail=30 || true
+          kubectl -n kube-system logs ds/kindnet --tail=50 || true
+          journalctl --user --no-pager -n 80 || true

@@ -1,0 +1,28 @@
+# The same Deployment with the label the policy asks for.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    team: payments
+  namespace: strict-team
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: nginx
+          image: nginx:1.29-alpine
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

@@ -1,0 +1,72 @@
+# What a platform team typically hands a developer on a shared cluster: one namespace, and an
+# identity that can deploy and debug there - but can't read Secrets, can't touch other teams'
+# namespaces, and can't change the namespace's own guard rails.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-payments
+---
+# The identity. Real clusters use your company login (OIDC / SSO) here; a ServiceAccount with a
+# short-lived token behaves the same from kubectl's point of view and needs no extra software.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer
+  namespace: team-payments
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: team-payments
+rules:
+  # Look at everything a developer normally needs to see...
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io", "gateway.networking.k8s.io", "autoscaling", "policy"]
+    resources: ["pods", "pods/log", "services", "endpoints", "configmaps", "events", "deployments", "deployments/scale", "replicasets",
+                "statefulsets", "jobs", "cronjobs", "ingresses", "httproutes", "horizontalpodautoscalers",
+                "poddisruptionbudgets", "persistentvolumeclaims", "resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch"]
+  # ...change the things an app consists of...
+  - apiGroups: ["", "apps", "batch"]
+    resources: ["deployments", "deployments/scale", "configmaps", "services", "jobs", "cronjobs"]
+    verbs: ["create", "update", "patch", "delete"]
+  # ...and debug Pods. Note what is NOT here: secrets, roles, rolebindings, resourcequotas (write).
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/portforward"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer
+  namespace: team-payments
+subjects:
+  - kind: ServiceAccount
+    name: developer
+    namespace: team-payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: developer
+---
+# The platform team's guard rail: this namespace gets at most 6 Pods.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-payments
+  namespace: team-payments
+spec:
+  hard:
+    pods: "6"
+---
+# A Secret the developer identity must not be able to read.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: payment-provider
+  namespace: team-payments
+stringData:
+  API_KEY: "sk-lessons-only-not-a-real-key"

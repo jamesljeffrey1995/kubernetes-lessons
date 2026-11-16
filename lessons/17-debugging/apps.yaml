@@ -1,0 +1,59 @@
+# Two apps that can't be debugged the way earlier lessons did it.
+#
+# 1) "minimal": runs fine, but its image contains ONE file - the program. No shell, no curl,
+#    no ls. This is what production images look like ("distroless" / "scratch" images):
+#    smaller, and far fewer security holes. 'kubectl exec ... -- sh' has nothing to run.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minimal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minimal
+  template:
+    metadata:
+      labels:
+        app: minimal
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: app
+          image: traefik/whoami:v1.11.0
+          args: ["--port=8080"]
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+---
+# 2) "crasher": exits a second after starting, so there is never a running container to
+#    exec into. It crashes because a file it expects is missing.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crasher
+  labels:
+    app: crasher
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: app
+      image: busybox:1.37
+      command:
+        - sh
+        - -c
+        - |
+          echo "starting up, reading /etc/app/settings.conf"
+          cat /etc/app/settings.conf || { echo "FATAL: cannot read settings"; exit 1; }
+          sleep infinity
+      resources:
+        requests:
+          cpu: 10m
+          memory: 8Mi
+        limits:
+          memory: 16Mi

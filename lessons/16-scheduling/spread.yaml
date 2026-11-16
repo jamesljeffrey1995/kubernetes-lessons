@@ -1,0 +1,43 @@
+# Four replicas that must be spread evenly over the nodes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spread
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: spread
+  template:
+    metadata:
+      labels:
+        app: spread
+    spec:
+      terminationGracePeriodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1                              # the fullest and emptiest node may differ by at most 1 Pod
+          topologyKey: kubernetes.io/hostname     # "spread over nodes". In the cloud you'd also spread over
+                                                  # topology.kubernetes.io/zone, so one data centre can fail
+          whenUnsatisfiable: DoNotSchedule        # a hard rule: rather Pending than uneven.
+                                                  # ScheduleAnyway makes it a preference instead
+          nodeTaintsPolicy: Honor                 # don't count nodes this Pod can't run on (the control plane,
+                                                  # a cordoned node). Without it they count as "empty nodes"
+                                                  # and Pods get stuck Pending for no visible reason
+          labelSelector:
+            matchLabels:
+              app: spread
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.11.0
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

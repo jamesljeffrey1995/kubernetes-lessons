@@ -1,0 +1,169 @@
+# The smallest thing that deserves the name "operator": a Pod running a loop that
+#   1. reads every Website,
+#   2. works out which Deployment, Service and ConfigMap it SHOULD have,
+#   3. applies them, and
+#   4. writes what it observed back into the Website's status.
+# Real operators are written in Go (Kubebuilder / Operator SDK) or other languages and WATCH for
+# changes instead of polling every few seconds - but they are this same loop.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: website-operator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: website-operator
+  namespace: website-operator
+---
+# An operator needs RBAC for everything it reads and creates, in every namespace it serves.
+# Reviewing this list is how you judge what installing an operator lets it do.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: website-operator
+rules:
+  - apiGroups: ["lessons.example.com"]
+    resources: ["websites"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["lessons.example.com"]
+    resources: ["websites/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps", "services"]
+    verbs: ["get", "create", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: website-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: website-operator
+subjects:
+  - kind: ServiceAccount
+    name: website-operator
+    namespace: website-operator
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: website-operator
+  namespace: website-operator
+data:
+  # The reconcile loop.
+  reconcile.sh: |
+    #!/bin/sh
+    echo "website-operator started"
+    while true; do
+      kubectl get websites --all-namespaces -o json | jq -c '.items[]' | while read -r site; do
+        ns=$(echo "$site" | jq -r '.metadata.namespace')
+        name=$(echo "$site" | jq -r '.metadata.name')
+
+        # Desired state: computed from the Website, applied every time. 'kubectl apply' changes
+        # only what differs, so repeating it is harmless - and it REPAIRS things: delete the
+        # Deployment by hand and it is back within seconds.
+        if echo "$site" | jq -f /operator/desired.jq | kubectl apply -f - >/dev/null; then
+          ready=$(kubectl -n "$ns" get deployment "site-$name" -o jsonpath='{.status.readyReplicas}')
+          kubectl -n "$ns" patch website "$name" --subresource=status --type=merge \
+            -p "{\"status\":{\"readyReplicas\":${ready:-0},\"url\":\"http://site-$name.$ns\"}}" >/dev/null
+        else
+          echo "could not reconcile $ns/$name"
+        fi
+      done
+      sleep 3
+    done
+
+  # Turns one Website (JSON in) into the three objects it should own (JSON out).
+  desired.jq: |
+    . as $site
+    | ("site-" + $site.metadata.name) as $name
+    | {app: "website", website: $site.metadata.name} as $labels
+    # ownerReferences make these objects "children" of the Website: delete the Website and
+    # Kubernetes' garbage collector deletes them too. The operator needs no delete logic.
+    | [{
+        apiVersion: $site.apiVersion, kind: $site.kind,
+        name: $site.metadata.name, uid: $site.metadata.uid,
+        controller: true
+      }] as $owner
+    | {namespace: $site.metadata.namespace, name: $name, labels: $labels, ownerReferences: $owner} as $meta
+    | {
+        apiVersion: "v1", kind: "List",
+        items: [
+          {
+            apiVersion: "v1", kind: "ConfigMap", metadata: $meta,
+            data: {"index.html": ("<h1>" + ($site.spec.title | @html) + "</h1>\n")}
+          },
+          {
+            apiVersion: "apps/v1", kind: "Deployment", metadata: $meta,
+            spec: {
+              replicas: ($site.spec.replicas // 1),
+              selector: {matchLabels: $labels},
+              template: {
+                # The title is part of the Pod template, so changing it rolls out new Pods.
+                metadata: {labels: $labels, annotations: {"lessons.example.com/title": $site.spec.title}},
+                spec: {
+                  terminationGracePeriodSeconds: 1,
+                  containers: [{
+                    name: "nginx", image: "nginx:1.29-alpine",
+                    ports: [{containerPort: 80}],
+                    readinessProbe: {httpGet: {path: "/", port: 80}},
+                    resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {memory: "32Mi"}},
+                    volumeMounts: [{name: "html", mountPath: "/usr/share/nginx/html"}]
+                  }],
+                  volumes: [{name: "html", configMap: {name: $name}}]
+                }
+              }
+            }
+          },
+          {
+            apiVersion: "v1", kind: "Service", metadata: $meta,
+            spec: {selector: $labels, ports: [{port: 80, targetPort: 80}]}
+          }
+        ]
+      }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: website-operator
+  namespace: website-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: website-operator
+  template:
+    metadata:
+      labels:
+        app: website-operator
+    spec:
+      serviceAccountName: website-operator
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: operator
+          image: alpine/k8s:1.37.0          # kubectl + jq + a shell
+          command: ["sh", "/operator/reconcile.sh"]
+          env:
+            - name: HOME                     # kubectl wants a writable home for its cache
+              value: /tmp
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: operator
+              mountPath: /operator
+      volumes:
+        - name: operator
+          configMap:
+            name: website-operator

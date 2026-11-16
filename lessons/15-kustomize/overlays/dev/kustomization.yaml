@@ -1,0 +1,20 @@
+# The DEV overlay: "the base, plus these differences". It contains no copy of the Deployment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shop-dev            # put everything in this namespace
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+labels:
+  - pairs:
+      environment: dev
+    includeTemplates: true     # also label the Pods (but leave selectors alone)
+
+configMapGenerator:
+  - name: whoami-config
+    behavior: merge            # change one key of the base's ConfigMap instead of replacing it
+    literals:
+      - WHOAMI_NAME=dev
