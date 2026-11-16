@@ -53,6 +53,13 @@ U=4242
 mkdir -p "$WORK/cg-good/user.slice/user-$U.slice/user@$U.service" "$WORK/cg-bad/user.slice/user-$U.slice/user@$U.service" \
          "$WORK/cg-rhel8/user.slice/user-$U.slice/user@$U.service"
 echo "cpuset cpu io memory pids" > "$WORK/cg-good/user.slice/user-$U.slice/user@$U.service/cgroup.controllers"
+# Like a RHEL 8 machine where the kernel refuses 'cpu': every controller except cpu, all the way down.
+mkdir -p "$WORK/cg-nocpu/user.slice/user-$U.slice/user@$U.service"
+echo "cpuset io memory pids" > "$WORK/cg-nocpu/user.slice/user-$U.slice/user@$U.service/cgroup.controllers"
+echo "cpuset io memory pids" > "$WORK/cg-nocpu/cgroup.subtree_control"
+# Delegation drop-ins: none, and one written by an admin.
+mkdir -p "$WORK/dropin-none" "$WORK/dropin-set"
+printf '[Service]\nDelegate=cpu cpuset io memory pids\n' > "$WORK/dropin-set/delegate.conf"
 echo "memory pids"               > "$WORK/cg-bad/user.slice/user-$U.slice/user@$U.service/cgroup.controllers"
 echo "cpu memory pids"           > "$WORK/cg-rhel8/user.slice/user-$U.slice/user@$U.service/cgroup.controllers"
 mkdir -p "$WORK/mods-good/ip_tables" "$WORK/mods-good/ip6_tables" "$WORK/mods-good/iptable_nat" "$WORK/mods-good/ip6table_nat" "$WORK/mods-none"
@@ -77,7 +84,8 @@ LINUX=(HOST_OS=Linux HOST_KERNEL=6.8.0-test "CURRENT_UID=$U" CURRENT_USER=tester
        MODULES_DIR="$WORK/empty" PROC_SYS="$WORK/sys-good" RUN_SYSTEMD="$WORK/systemd" LINGER_DIR="$WORK/linger"
        DEV_FUSE="$WORK/fuse" USER_RUNTIME_DIR="$WORK/run" XDG_RUNTIME_DIR="$WORK/run"
        STORAGE_FSTYPE=xfs STORAGE_FREE_KB=50000000 "STORAGE_MOUNT_OPTS=rw,relatime" ULIMIT_NPROC=unlimited
-       HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= KIND_EXPERIMENTAL_PROVIDER= SUDO_USER=)
+       HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= KIND_EXPERIMENTAL_PROVIDER= SUDO_USER=
+       DELEGATE_DROPIN_DIR="$WORK/dropin-none")
 ROOTLESS_DOCKER=("${LINUX[@]}" "FAKE_SECURITY=[name=seccomp,profile=builtin name=rootless name=cgroupns]")
 ROOTLESS_PODMAN=("${LINUX[@]}" "FAKE_DOCKER_VERSION=podman version 4.9.4-rhel" FAKE_PODMAN_ROOTLESS=true KIND_EXPERIMENTAL_PROVIDER=podman)
 PASSED=0
@@ -163,6 +171,17 @@ scenario "RHEL 8 rootless Podman on cgroup v1" 1 "grubby --update-kernel=ALL" --
   "${ROOTLESS_PODMAN[@]}" FAKE_PODMAN_CGROUP=v1 OS_RELEASE="$WORK/os-release-rhel8" CGROUP_ROOT="$WORK/cg-bad"
 scenario "RHEL 8 kernel warns but passes"      0 "older than 5.8" -- \
   "${ROOTLESS_PODMAN[@]}" HOST_KERNEL=4.18.0-553.el8_10.x86_64 FAKE_ENGINE_KERNEL=4.18.0-553.el8_10.x86_64 CGROUP_ROOT="$WORK/cg-rhel8"
+scenario "delegation never configured"         1 "Delegation isn't configured" -- \
+  "${ROOTLESS_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-nocpu"
+scenario "delegation configured, not rebooted"  1 "started BEFORE it was written" -- \
+  "${ROOTLESS_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-nocpu" DELEGATE_DROPIN_DIR="$WORK/dropin-set" \
+  DELEGATE_CONF_MTIME=2000 USER_MANAGER_START=1000
+scenario "delegation active, RT processes block cpu" 1 "REALTIME processes run" -- \
+  "${ROOTLESS_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-nocpu" DELEGATE_DROPIN_DIR="$WORK/dropin-set" \
+  DELEGATE_CONF_MTIME=1000 USER_MANAGER_START=2000 "RT_PROCS_OVERRIDE=1187 multipathd /system.slice/multipathd.service"
+scenario "delegation active, cpu refused, cause unknown" 1 "echo +cpu | sudo tee" -- \
+  "${ROOTLESS_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-nocpu" DELEGATE_DROPIN_DIR="$WORK/dropin-set" \
+  DELEGATE_CONF_MTIME=1000 USER_MANAGER_START=2000 RT_PROCS_OVERRIDE=
 scenario "LDAP account without sub-UIDs"       1 "echo \"\$USER:100000:65536\"" -- "${ROOTLESS_PODMAN[@]}" "FAKE_UID_MAP=0 1000 1"
 scenario "Podman storage driver vfs"           0 "fuse-overlayfs" -- "${ROOTLESS_PODMAN[@]}" FAKE_STORE_DRIVER=vfs
 scenario "Podman home nearly full"             0 "GB free where images are stored" -- "${ROOTLESS_PODMAN[@]}" STORAGE_FREE_KB=2000000

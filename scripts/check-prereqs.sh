@@ -20,6 +20,7 @@ PROC_MODULES="${PROC_MODULES:-/proc/modules}"
 CGROUP_FS_ROOT="${CGROUP_FS_ROOT:-/sys/fs/cgroup}"
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 PROC_SYS="${PROC_SYS:-/proc/sys}"
+DELEGATE_DROPIN_DIR="${DELEGATE_DROPIN_DIR:-/etc/systemd/system/user@.service.d}"
 RUN_SYSTEMD="${RUN_SYSTEMD:-/run/systemd/system}"
 LINGER_DIR="${LINGER_DIR:-/var/lib/systemd/linger}"
 DEV_FUSE="${DEV_FUSE:-/dev/fuse}"
@@ -54,6 +55,76 @@ check_tool() {
   else
     fail "$name" "not found or not working (see lessons/00-setup/README.md)"
   fi
+}
+
+# Called when cgroup controllers are missing for the user. There are three different causes,
+# and they need three different fixes, so work out which one it is:
+#   1. delegation was never configured
+#   2. it is configured, but the user's systemd instance started before that and kept the old setting
+#   3. it is configured and active, but the KERNEL refuses to enable the cpu controller, because
+#      realtime processes are running outside the root cgroup (cgroup v2 rule on older kernels)
+explain_delegation() {
+  local missing=$1 conf="" conf_mtime="" started="" uid=$CURRENT_UID
+  for f in "$DELEGATE_DROPIN_DIR"/*.conf; do
+    [ -r "$f" ] && grep -qE '^[[:space:]]*Delegate=' "$f" && conf=$f
+  done
+
+  if [ -z "$conf" ]; then
+    fix "Delegation isn't configured. An admin (sudo) must run:"
+    fix "  sudo mkdir -p /etc/systemd/system/user@.service.d/"
+    fix "  printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
+    fix "  sudo systemctl daemon-reload"
+    fix "Then REBOOT - the setting applies when your user's systemd restarts."
+    fix "(systemd 252+ does this by default; yours: $(systemctl --version 2>/dev/null | head -n 1))"
+    return
+  fi
+
+  # 2) Has the user's systemd restarted since the file was written?
+  conf_mtime="${DELEGATE_CONF_MTIME:-$(stat -c %Y "$conf" 2>/dev/null)}"
+  started="${USER_MANAGER_START:-$(date -d "$(systemctl show "user@$uid.service" -p ActiveEnterTimestamp --value 2>/dev/null)" +%s 2>/dev/null)}"
+  if [ -n "$conf_mtime" ] && [ -n "$started" ] && [ "$conf_mtime" -gt "$started" ] 2>/dev/null; then
+    fix "$conf exists, but your user's systemd was started BEFORE it was written, so it still"
+    fix "has the old setting. Logging out doesn't help while any session (SSH, VS Code, tmux) or"
+    fix "lingering keeps it running. Reboot, then re-run this script."
+    fix "(Without a reboot, an admin can run: sudo systemctl restart user@$uid.service - this ends your sessions.)"
+    return
+  fi
+
+  # 3) Configured and active. Then the question is whether the kernel lets anyone enable 'cpu'.
+  if grep -qw cpu <<<"$missing" && ! grep -qw cpu "$CGROUP_ROOT/cgroup.subtree_control" 2>/dev/null; then
+    local rt
+    if [ -n "${RT_PROCS_OVERRIDE+x}" ]; then
+      rt=$RT_PROCS_OVERRIDE
+    else
+      # Realtime (FIFO/RR) processes whose cgroup isn't the root one. Kernel threads are always
+      # in the root cgroup, so they drop out by themselves.
+      rt=$(ps -eo pid=,cls=,comm= 2>/dev/null | awk '$2 == "FF" || $2 == "RR" { print $1, $3 }' |
+        while read -r pid comm; do
+          cg=$(sed -n 's/^0:://p' "/proc/$pid/cgroup" 2>/dev/null)
+          [ -n "$cg" ] && [ "$cg" != "/" ] && echo "$pid $comm $cg"
+        done)
+    fi
+    fix "$conf is in place and active, but the 'cpu' controller isn't enabled even at the top"
+    fix "of the cgroup tree ($CGROUP_ROOT/cgroup.subtree_control). That isn't something you configured wrong."
+    if [ -n "$rt" ]; then
+      fix "Cause: on this kernel, cgroup v2 refuses to enable 'cpu' while REALTIME processes run"
+      fix "outside the root cgroup (see 'realtime' in the kernel's cgroup-v2 documentation). These are:"
+      while read -r line; do fix "    $line"; done <<<"$rt"
+      fix "Changing that is a system administration decision (those services chose realtime priority"
+      fix "for a reason), so don't work around it yourself. Ask IT - the details are under"
+      fix "'RHEL 8' in lessons/00-setup/rootless.md. Kubernetes cannot run rootless here until then."
+    else
+      fix "No realtime processes found, so the cause is unknown. For IT or for an issue, collect:"
+      fix "  cat $CGROUP_ROOT/cgroup.controllers $CGROUP_ROOT/cgroup.subtree_control"
+      fix "  echo +cpu | sudo tee $CGROUP_ROOT/cgroup.subtree_control      # the error message is the answer"
+    fi
+    return
+  fi
+
+  fix "$conf is in place and your user's systemd has restarted since, yet these are still missing."
+  fix "Follow the chain down to see where they stop:"
+  fix "  grep . $CGROUP_ROOT/cgroup.subtree_control $CGROUP_ROOT/user.slice/cgroup.subtree_control \\"
+  fix "        $CGROUP_ROOT/user.slice/user-$uid.slice/cgroup.subtree_control"
 }
 
 # ---- Which container engine? ---------------------------------------------------------------
@@ -302,12 +373,7 @@ else
         [ -n "$OPTIONAL" ] && note delegate "not delegated:$OPTIONAL - kind doesn't require these (cpuset needs systemd 244+)"
       else
         fail delegate "cgroup controllers not delegated to your user:$MISSING"
-        fix "sudo mkdir -p /etc/systemd/system/user@.service.d/"
-        fix "printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf"
-        fix "sudo systemctl daemon-reload"
-        fix "Then REBOOT (or log out of every session) - the setting applies when your user's systemd restarts."
-        fix "Verify: cat $CTRL_FILE"
-        fix "(systemd 252+ does this by default; yours: $(systemctl --version 2>/dev/null | head -n 1))"
+        explain_delegation "$MISSING"
       fi
     else
       fail delegate "no systemd user session for your user ($CTRL_FILE is missing)"
