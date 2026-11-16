@@ -6,6 +6,7 @@
 #   - if it runs ROOTLESS (the default for Podman, optional for Docker): everything kind needs
 #     for that. Rootless mode has by far the most ways to fail, so most of this file is about it.
 #     Each check is explained in lessons/00-setup/rootless.md.
+#   - with ENGINE_SUDO=1: root's engine is checked through sudo (lessons/00-setup/rootful.md)
 #
 # Usage:  ./scripts/check-prereqs.sh                 full check
 #         ./scripts/check-prereqs.sh --for-cluster   only what cluster-up needs (no helm/git)
@@ -57,6 +58,20 @@ check_tool() {
   fi
 }
 
+# Realtime (FIFO/RR) processes whose cgroup isn't the root one: "pid command cgroup" per line.
+# Kernel threads are always in the root cgroup, so they drop out by themselves.
+realtime_procs() {
+  if [ -n "${RT_PROCS_OVERRIDE+x}" ]; then
+    [ -n "$RT_PROCS_OVERRIDE" ] && echo "$RT_PROCS_OVERRIDE"
+    return 0
+  fi
+  ps -eo pid=,cls=,comm= 2>/dev/null | awk '$2 == "FF" || $2 == "RR" { print $1, $3 }' |
+    while read -r pid comm; do
+      cg=$(sed -n 's/^0:://p' "/proc/$pid/cgroup" 2>/dev/null)
+      [ -n "$cg" ] && [ "$cg" != "/" ] && echo "$pid $comm $cg"
+    done
+}
+
 # Called when cgroup controllers are missing for the user. There are three different causes,
 # and they need three different fixes, so work out which one it is:
 #   1. delegation was never configured
@@ -93,17 +108,7 @@ explain_delegation() {
   # 3) Configured and active. Then the question is whether the kernel lets anyone enable 'cpu'.
   if grep -qw cpu <<<"$missing" && ! grep -qw cpu "$CGROUP_ROOT/cgroup.subtree_control" 2>/dev/null; then
     local rt
-    if [ -n "${RT_PROCS_OVERRIDE+x}" ]; then
-      rt=$RT_PROCS_OVERRIDE
-    else
-      # Realtime (FIFO/RR) processes whose cgroup isn't the root one. Kernel threads are always
-      # in the root cgroup, so they drop out by themselves.
-      rt=$(ps -eo pid=,cls=,comm= 2>/dev/null | awk '$2 == "FF" || $2 == "RR" { print $1, $3 }' |
-        while read -r pid comm; do
-          cg=$(sed -n 's/^0:://p' "/proc/$pid/cgroup" 2>/dev/null)
-          [ -n "$cg" ] && [ "$cg" != "/" ] && echo "$pid $comm $cg"
-        done)
-    fi
+    rt=$(realtime_procs)
     fix "$conf is in place and active, but the 'cpu' controller isn't enabled even at the top"
     fix "of the cgroup tree ($CGROUP_ROOT/cgroup.subtree_control). That isn't something you configured wrong."
     if [ -n "$rt" ]; then
@@ -139,7 +144,16 @@ esac
 CTR_VERSION=$("$CTR" --version 2>/dev/null)
 IS_PODMAN=false
 grep -qi podman <<<"$CTR_VERSION" && IS_PODMAN=true
-cinfo() { "$CTR" info --format "$1" 2>/dev/null; }
+
+# ENGINE_SUDO=1: the course runs root's engine through sudo (see scripts/engine.sh), so that's the
+# engine to inspect. The full path is used because sudo's secure_path often lacks /usr/local/bin.
+SUDO_ENGINE=false
+if [ "${ENGINE_SUDO:-}" = "1" ] && [ "$CURRENT_UID" != "0" ]; then
+  SUDO_ENGINE=true
+  CTR_BIN=$(command -v "$CTR" 2>/dev/null || echo "$CTR")
+fi
+ctr() { if $SUDO_ENGINE; then sudo -H "$CTR_BIN" "$@"; else "$CTR" "$@"; fi; }
+cinfo() { ctr info --format "$1" 2>/dev/null; }
 
 echo "Checking tools..."
 if [ "$CTR" != docker ] && [ "$CTR" != podman ]; then
@@ -166,12 +180,32 @@ fi
 if [ "$CURRENT_UID" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${ALLOW_SUDO:-}" != "1" ]; then
   fail sudo "don't run the course scripts with sudo"
   fix "sudo uses root's containers and writes root's kubeconfig; '$SUDO_USER' then can't see the cluster."
-  fix "Run them as yourself. (Really want a root-owned cluster? ALLOW_SUDO=1, and use sudo for every command.)"
+  fix "Run them as yourself. Want root's engine? Run as yourself with ENGINE_SUDO=1: the scripts then"
+  fix "use sudo only for the engine and kind, and put the cluster in YOUR kubeconfig. See lessons/00-setup/rootful.md"
+fi
+
+if $SUDO_ENGINE; then
+  if ! have sudo; then
+    fail sudo "ENGINE_SUDO=1 is set, but there is no 'sudo' command"
+  elif ! sudo -v; then
+    fail sudo "ENGINE_SUDO=1 is set, but sudo was refused for '$CURRENT_USER'"
+    fix "Check with: sudo -v   (no sudo rights at all? Rootless mode or a VM are the options: lessons/00-setup/rootless.md)"
+  else
+    pass sudo "ENGINE_SUDO=1: $CTR and kind will run as root through sudo; kubectl and helm as you"
+  fi
+fi
+
+# A kubeconfig owned by root (left by an earlier 'sudo ./scripts/...') breaks every kubectl command.
+KCFG="${KUBECONFIG:-$HOME/.kube/config}"
+KCFG="${KCFG%%:*}"
+if { [ -e "$KCFG" ] && [ ! -w "$KCFG" ]; } || { [ -d "$(dirname "$KCFG")" ] && [ ! -w "$(dirname "$KCFG")" ]; }; then
+  fail kubecfg "you can't write $KCFG (owned by root after an earlier sudo run?)"
+  fix "Fix: sudo chown -R \"\$USER\" \"$(dirname "$KCFG")\""
 fi
 
 echo
 echo "Checking the container engine ($CTR)..."
-INFO_ERR=$("$CTR" info 2>&1 >/dev/null)
+INFO_ERR=$(ctr info 2>&1 >/dev/null)
 INFO_RC=$?
 if [ $INFO_RC -ne 0 ]; then
   if $IS_PODMAN || [ "$CTR" = podman ]; then
@@ -321,7 +355,28 @@ else
   fi
 
   if [ "$ROOTLESS" != "true" ]; then
-    $ENGINE_LOCAL && [ "$HOST_OS" = "Linux" ] && pass rootful "containers run as root (the simple case - nothing more to check)"
+    if $SUDO_ENGINE && $ENGINE_LOCAL; then
+      pass rootful "root's $CTR, used through sudo (ENGINE_SUDO=1)"
+      # A 'lessons' cluster left in your OWN (rootless) Podman holds port 8080 and the kubectl context.
+      if $IS_PODMAN && grep -qx 'lessons-control-plane' <<<"$("$CTR" ps -a --format '{{.Names}}' 2>/dev/null)"; then
+        warn old "your rootless Podman still has a 'lessons' cluster; the new one needs its port 8080"
+        fix "Delete it first, without sudo:  ENGINE_SUDO=0 ./scripts/cluster-down.sh"
+      fi
+      # Rootful doesn't get round the RHEL 8 realtime problem (rootless.md, row 15b): if the kernel
+      # refuses 'cpu' at the top of the tree, no container gets it, root's included.
+      if [ "$CGROUP" = "2" ] && [ -r "$CGROUP_ROOT/cgroup.subtree_control" ] &&
+         ! grep -qw cpu "$CGROUP_ROOT/cgroup.subtree_control"; then
+        RT=$(realtime_procs)
+        if [ -n "$RT" ]; then
+          warn cpu "the kernel won't enable the 'cpu' cgroup controller while these realtime processes run:"
+          while read -r line; do fix "    $line"; done <<<"$RT"
+          fix "That applies to root's containers too, so the nodes' kubelet may refuse to start."
+          fix "Not tested by this course. See 'RHEL 8' in lessons/00-setup/rootless.md for what to ask IT."
+        fi
+      fi
+    elif $ENGINE_LOCAL && [ "$HOST_OS" = "Linux" ]; then
+      pass rootful "containers run as root (the simple case - nothing more to check)"
+    fi
   elif ! $ENGINE_LOCAL; then
     # Podman machine / Podman Desktop on Windows and macOS: rootless inside a VM we can't inspect.
     warn rootless "$CTR runs rootless inside a VM (Podman machine?) - its host settings can't be checked from here"
@@ -516,6 +571,9 @@ echo
 if [ $failed -ne 0 ]; then
   echo "Fix the items marked ✘ above, then re-run this script."
   echo "More help: lessons/00-setup/README.md ('Things that go wrong') and lessons/00-setup/rootless.md."
+  if [ "${ROOTLESS:-}" = "true" ] && [ "${ENGINE_LOCAL:-false}" = "true" ]; then
+    echo "Can't get rootless working, but you have sudo? Root's engine is simpler: lessons/00-setup/rootful.md"
+  fi
   exit 1
 fi
 if [ $warned -ne 0 ]; then

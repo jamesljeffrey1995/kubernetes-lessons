@@ -8,7 +8,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# Sets CTR (docker or podman) and KIND_EXPERIMENTAL_PROVIDER when Podman is in use.
+# Sets CTR (docker or podman) and KIND_EXPERIMENTAL_PROVIDER when Podman is in use. With
+# ENGINE_SUDO=1, '$CTR' and 'kind' below run as root: root's engine has its own image store, and
+# that is the one the cluster's nodes live in.
 # shellcheck source=scripts/engine.sh
 source ../scripts/engine.sh
 

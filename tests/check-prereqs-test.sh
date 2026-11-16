@@ -2,7 +2,7 @@
 # Tests scripts/check-prereqs.sh and .ps1 against simulated machines, using fake 'docker' and
 # 'podman' commands and fake /sys and /proc trees: cgroup v1, rootless Docker/Podman with each
 # host setting missing in turn, LDAP accounts without sub-UIDs, NFS home directories, Podman
-# machine on Windows/macOS, corporate proxies, sudo...
+# machine on Windows/macOS, corporate proxies, sudo, root's engine through sudo (ENGINE_SUDO=1)...
 # Needs: bash, and pwsh to also test the PowerShell version. Doesn't need a running Docker.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -32,7 +32,10 @@ case "$*" in
   "info --format {{.CgroupDriver}}")     echo "${FAKE_CGROUP_DRIVER:-systemd}" ;;
   # Podman's field names
   "info --format {{.Host.CgroupsVersion}}")    echo "${FAKE_PODMAN_CGROUP:-v2}" ;;
-  "info --format {{.Host.Security.Rootless}}") echo "${FAKE_PODMAN_ROOTLESS:-false}" ;;
+  # Through the fake sudo below, the same command is root's engine, which is never rootless.
+  "info --format {{.Host.Security.Rootless}}")
+    if [ "${FAKE_AS_ROOT:-}" = 1 ]; then echo false; else echo "${FAKE_PODMAN_ROOTLESS:-false}"; fi ;;
+  "ps -a --format {{.Names}}")                 [ "${FAKE_AS_ROOT:-}" = 1 ] || echo "${FAKE_USER_CONTAINERS:-}" ;;
   "info --format {{.Host.Kernel}}")            echo "${FAKE_ENGINE_KERNEL:-6.8.0-test}" ;;
   "info --format {{.Host.MemTotal}}")          echo "${FAKE_MEM:-16000000000}" ;;
   "info --format {{.Store.GraphRoot}}")        echo "${FAKE_STORE_ROOT:-/}" ;;
@@ -43,6 +46,15 @@ esac
 FAKE
 cp "$WORK/bin/docker" "$WORK/bin/podman"
 printf '#!/bin/sh\necho "kind v0.33.0 fake"\n' > "$WORK/bin/kind"
+# Fake sudo: 'sudo -v' succeeds unless FAKE_SUDO_DENIED is set; anything else runs "as root".
+cat > "$WORK/bin/sudo" <<'FAKE'
+#!/bin/sh
+if [ -n "${FAKE_SUDO_DENIED:-}" ]; then echo "Sorry, user tester may not run sudo." >&2; exit 1; fi
+while [ $# -gt 0 ]; do
+  case "$1" in -v) exit 0 ;; -H|-n) shift ;; *) break ;; esac
+done
+FAKE_AS_ROOT=1 exec "$@"
+FAKE
 printf '#!/bin/sh\necho "Client Version: v1.37.2"\n' > "$WORK/bin/kubectl"
 printf '#!/bin/sh\necho "v3.22.1"\n' > "$WORK/bin/helm"
 chmod +x "$WORK/bin/"*
@@ -88,6 +100,8 @@ LINUX=(HOST_OS=Linux HOST_KERNEL=6.8.0-test "CURRENT_UID=$U" CURRENT_USER=tester
        DELEGATE_DROPIN_DIR="$WORK/dropin-none")
 ROOTLESS_DOCKER=("${LINUX[@]}" "FAKE_SECURITY=[name=seccomp,profile=builtin name=rootless name=cgroupns]")
 ROOTLESS_PODMAN=("${LINUX[@]}" "FAKE_DOCKER_VERSION=podman version 4.9.4-rhel" FAKE_PODMAN_ROOTLESS=true KIND_EXPERIMENTAL_PROVIDER=podman)
+# Rootless Podman for your own user, used the ENGINE_SUDO way: root's Podman through sudo.
+SUDO_PODMAN=("${ROOTLESS_PODMAN[@]}" ENGINE_SUDO=1)
 PASSED=0
 
 # run_one <label> <name> <expected exit> <expected text> <command...>
@@ -133,6 +147,7 @@ scenario "cgroup version unknown is a failure" 1 "could not determine the cgroup
   "${LINUX[@]}" FAKE_CGROUP= CGROUP_FS_ROOT="$WORK/not-a-cgroup-fs"
 scenario "Podman posing as docker"             0 "KIND_EXPERIMENTAL_PROVIDER" -- "${LINUX[@]}" "FAKE_DOCKER_VERSION=podman version 5.4.0"
 scenario "run with sudo is refused"            1 "don't run the course scripts with sudo" -- "${LINUX[@]}" CURRENT_UID=0 SUDO_USER=tester
+scenario "sudo refusal points to ENGINE_SUDO"  1 "Run as yourself with ENGINE_SUDO=1" -- "${LINUX[@]}" CURRENT_UID=0 SUDO_USER=tester
 scenario "engine VM too small"                 1 "three Kubernetes nodes will not start" -- "${LINUX[@]}" FAKE_MEM=2000000000
 scenario "proxy without NO_PROXY"              0 "NO_PROXY doesn't list localhost" -- "${LINUX[@]}" HTTPS_PROXY=http://proxy.corp:8080 NO_PROXY= no_proxy=
 scenario "proxy on localhost"                  0 "cluster nodes can't reach that address" -- \
@@ -190,6 +205,22 @@ scenario "Podman via su: no user bus"          0 "systemd-run --user' can't work
 scenario "Podman 3 is flagged as old"          0 "Podman 3.x is old" -- "${ROOTLESS_PODMAN[@]}" "FAKE_DOCKER_VERSION=podman version 3.4.4"
 scenario "Podman only, no provider variable"   0 "kind needs: export KIND_EXPERIMENTAL_PROVIDER=podman" -- \
   "${LINUX[@]}" "FAKE_DOCKER_VERSION=podman version 5.4.0"
+
+echo "--- root's engine through sudo (ENGINE_SUDO=1, lessons/00-setup/rootful.md)"
+scenario "ENGINE_SUDO: root's Podman is checked" 0 "root's podman, used through sudo" -- "${SUDO_PODMAN[@]}"
+scenario "ENGINE_SUDO: no rootless checks"     0 "All good" -- "${SUDO_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-bad" DEV_FUSE="$WORK/nope"
+scenario "ENGINE_SUDO: sudo refused"           1 "sudo was refused" -- "${SUDO_PODMAN[@]}" FAKE_SUDO_DENIED=1
+scenario "ENGINE_SUDO: old rootless cluster"   0 "ENGINE_SUDO=0 ./scripts/cluster-down.sh" -- \
+  "${SUDO_PODMAN[@]}" FAKE_USER_CONTAINERS=lessons-control-plane
+scenario "ENGINE_SUDO: realtime blocks cpu"    0 "applies to root's containers too" -- \
+  "${SUDO_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-nocpu" "RT_PROCS_OVERRIDE=1187 multipathd /system.slice/multipathd.service"
+scenario "ENGINE_SUDO: root's Docker"          0 "root's docker, used through sudo" -- "${ROOTLESS_DOCKER[@]}" ENGINE_SUDO=1 \
+  "FAKE_SECURITY=[name=seccomp,profile=builtin]"
+scenario "rootless failure points to rootful.md" 1 "lessons/00-setup/rootful.md" -- "${ROOTLESS_PODMAN[@]}" CGROUP_ROOT="$WORK/cg-nocpu"
+if [ "$(id -u)" != 0 ]; then      # root can write any file, so this can't be simulated as root
+  mkdir -p "$WORK/kube-ro" && : > "$WORK/kube-ro/config" && chmod 444 "$WORK/kube-ro/config"
+  scenario "kubeconfig owned by root"          1 "you can't write" -- "${LINUX[@]}" KUBECONFIG="$WORK/kube-ro/config"
+fi
 
 echo "--- engines inside a VM (Docker Desktop, Podman machine): host checks must be skipped"
 scenario "Podman machine on macOS"             0 "runs rootless inside a VM" -- \

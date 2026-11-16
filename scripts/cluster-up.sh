@@ -10,6 +10,7 @@
 # Usage:   ./scripts/cluster-up.sh
 # Options: KIND_CONFIG=path/to/other-kind-config.yaml ./scripts/cluster-up.sh
 #          SKIP_HOST_CHECKS=1 ./scripts/cluster-up.sh   (skip the pre-flight checks - not recommended)
+#          ENGINE_SUDO=1 ./scripts/cluster-up.sh        (root's engine via sudo - lessons/00-setup/rootful.md)
 set -euo pipefail
 
 CLUSTER_NAME="lessons"
@@ -21,8 +22,12 @@ warn() { printf '\033[1;33mWARNING: %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # Sets CTR (docker or podman), IS_PODMAN, and KIND_EXPERIMENTAL_PROVIDER when Podman is in use.
+# With ENGINE_SUDO=1 it also makes '$CTR' and 'kind' run as root through sudo.
 # shellcheck source=scripts/engine.sh
 source "$ROOT/scripts/engine.sh"
+if [ "$ENGINE_SUDO" = "1" ]; then
+  echo "ENGINE_SUDO=1: $CTR and kind run as root (through sudo); kubectl and helm run as you."
+fi
 
 step "Checking this machine (tools, container engine, cgroups, rootless mode)"
 if [ "${SKIP_HOST_CHECKS:-}" = "1" ]; then
@@ -95,7 +100,7 @@ if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
     "$CTR" start "${STOPPED[@]}" >/dev/null || die "Could not start the nodes. Recreate the cluster: ./scripts/cluster-down.sh && ./scripts/cluster-up.sh"
   fi
   # Rewrites the kubeconfig entry too, in case it was lost or the API port changed.
-  kind export kubeconfig --name "$CLUSTER_NAME" >/dev/null 2>&1 || kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
+  engine_kubeconfig_sync "$CLUSTER_NAME" 2>/dev/null || kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
   echo "Waiting for the API server..."
   ready=false
   for _ in $(seq 1 60); do
@@ -108,7 +113,8 @@ else
   if [ -n "$HOST_PORT" ] && port_in_use "$HOST_PORT"; then
     die "Port $HOST_PORT on this machine is already in use, and the cluster's front door needs it.
        See what holds it:  ss -ltnp | grep ':$HOST_PORT '   (Windows: netstat -ano | findstr :$HOST_PORT)
-       - An earlier cluster made with sudo or another engine?  sudo kind get clusters / podman ps / docker ps
+       - An earlier cluster made with sudo or another engine?  sudo podman ps / podman ps / docker ps
+         (Switching between rootless and ENGINE_SUDO=1? Delete the old cluster first - lessons/00-setup/rootful.md)
        - Something else? Change hostPort in platform/kind-config.yaml and use that port in the lessons."
   fi
 
@@ -135,6 +141,10 @@ else
     die "kind could not create the cluster (full output above)."
   fi
   rm -f "$LOG"
+  if [ "$ENGINE_SUDO" = "1" ]; then
+    echo "Copying the cluster's entry from root's kubeconfig into yours (${KUBECONFIG:-$HOME/.kube/config})."
+    engine_kubeconfig_sync "$CLUSTER_NAME" || die "Could not update your kubeconfig. Is ~/.kube owned by root? Fix: sudo chown -R \"\$USER\" ~/.kube"
+  fi
 fi
 kubectl wait --for=condition=Ready nodes --all --timeout=300s \
   || die "Nodes are not Ready after 5 minutes. Look at: kubectl get nodes; kubectl -n kube-system get pods
@@ -147,8 +157,13 @@ if $IS_PODMAN; then
   if [ -n "$PIDS" ] && [ "$PIDS" -gt 0 ] 2>/dev/null && [ "$PIDS" -lt 16384 ] 2>/dev/null; then
     warn "Podman limits each node to $PIDS processes. Lessons that scale up (13, capstone) can hit that:"
     warn "Pods then fail with 'fork/exec ... resource temporarily unavailable'. To raise it:"
-    warn "  mkdir -p ~/.config/containers"
-    warn "  printf '[containers]\\npids_limit = 65536\\n' >> ~/.config/containers/containers.conf"
+    if [ "$ENGINE_SUDO" = "1" ]; then
+      warn "  sudo mkdir -p /etc/containers/containers.conf.d"
+      warn "  printf '[containers]\\npids_limit = 65536\\n' | sudo tee /etc/containers/containers.conf.d/90-kind.conf"
+    else
+      warn "  mkdir -p ~/.config/containers"
+      warn "  printf '[containers]\\npids_limit = 65536\\n' >> ~/.config/containers/containers.conf"
+    fi
     warn "  ./scripts/cluster-down.sh && ./scripts/cluster-up.sh     (the limit is fixed when a node is created)"
   fi
 fi
@@ -181,5 +196,8 @@ if engine_is_rootless 2>/dev/null && [ ! -e "/var/lib/systemd/linger/$(id -un)" 
 fi
 if $IS_PODMAN; then
   echo "Podman doesn't restart nodes after a reboot. Run this script again to bring the cluster back."
+fi
+if [ "$ENGINE_SUDO" = "1" ]; then
+  echo "The nodes are root's containers: where a lesson says 'docker ps' or 'docker exec', type 'sudo $CTR ps' / 'sudo $CTR exec'."
 fi
 echo "Delete it any time with: ./scripts/cluster-down.sh"

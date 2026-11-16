@@ -3,7 +3,8 @@ name: CI
 # Proves the course actually works: lints everything, then creates a real kind cluster with the
 # course's own scripts and runs every lesson and the capstone demo against it - once with the
 # bash scripts + Helm 3, once with the PowerShell scripts + Helm 4. A third job repeats the
-# essentials on ROOTLESS PODMAN with no 'docker' command at all, like a Red Hat workstation.
+# essentials on ROOTLESS PODMAN with no 'docker' command at all, like a Red Hat workstation, and
+# a fourth on ROOT'S Podman through sudo (ENGINE_SUDO=1, lessons/00-setup/rootful.md).
 
 on:
   push:
@@ -63,6 +64,13 @@ jobs:
 
       - name: Pre-flight checks against simulated machines (bash + PowerShell)
         run: ./tests/check-prereqs-test.sh
+
+      - name: ENGINE_SUDO wrapper and kubeconfig merge (fake sudo, real kubectl)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/kubectl" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x "$RUNNER_TEMP/bin/kubectl"
+          PATH="$RUNNER_TEMP/bin:$PATH" ./tests/engine-sudo-test.sh
 
       - name: PowerShell 7 parse check
         shell: pwsh
@@ -247,3 +255,89 @@ jobs:
           kubectl -n kube-system logs ds/kube-proxy --tail=30 || true
           kubectl -n kube-system logs ds/kindnet --tail=50 || true
           journalctl --user --no-pager -n 80 || true
+
+  rootful-podman-sudo:
+    name: End-to-end (root's Podman through sudo, ENGINE_SUDO=1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ENGINE_SUDO: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.22.1
+
+      - name: Install kind and kubectl
+        run: |
+          curl -fsSLo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kind kubectl /usr/local/bin/
+
+      - name: Make the runner look like a Red Hat workstation (Podman only, RHEL's sudo)
+        run: |
+          sudo systemctl stop docker.socket docker.service || true
+          sudo rm -f /usr/bin/docker /usr/local/bin/docker
+          if command -v docker; then echo "docker is still on PATH"; exit 1; fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman aardvark-dns netavark
+
+          # RHEL's sudo: /usr/local/bin is NOT on secure_path, so a plain 'sudo kind' fails there.
+          echo 'Defaults secure_path="/usr/sbin:/usr/bin:/sbin:/bin"' | sudo tee /etc/sudoers.d/zz-rhel-path
+          sudo chmod 0440 /etc/sudoers.d/zz-rhel-path
+          if sudo sh -c 'command -v kind'; then echo "kind is still on sudo's PATH"; exit 1; fi
+
+          # The two host settings rootful.md asks for.
+          sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
+          sudo mkdir -p /etc/containers/containers.conf.d
+          printf '[containers]\npids_limit = 65536\n' | sudo tee /etc/containers/containers.conf.d/90-kind.conf
+
+      - name: Check prerequisites
+        run: ./scripts/check-prereqs.sh
+
+      - name: Create cluster (scripts/cluster-up.sh)
+        run: ./scripts/cluster-up.sh
+
+      - name: kubectl runs as the user, and the nodes belong to root
+        run: |
+          test "$(kubectl config current-context)" = kind-lessons
+          test -O "$HOME/.kube/config"
+          kubectl get nodes
+          sudo podman ps --format '{{.Names}}' | grep -qx lessons-control-plane
+          if podman ps --format '{{.Names}}' 2>/dev/null | grep -q lessons; then echo "nodes are in the user's Podman"; exit 1; fi
+
+      - name: Lessons that depend most on the host (networking, storage, limits, gateway, security)
+        env:
+          ONLY: "05 08 09 10 12 16 17 19 20"
+        run: ./tests/lessons-test.sh
+
+      - name: Capstone - build with root's Podman, load into kind, deploy
+        run: ./capstone/scripts/build.sh && ./capstone/scripts/deploy.sh
+
+      - name: Capstone - zero-downtime proof
+        run: ./tests/zero-downtime.sh
+
+      - name: Simulate a reboot - stopped nodes must come back with cluster-up
+        run: |
+          sudo podman stop lessons-worker lessons-worker2 lessons-control-plane
+          ./scripts/cluster-up.sh
+          kubectl get nodes
+          kubectl -n pulse rollout status deploy/pulse --timeout=180s
+
+      - name: cluster-down removes the cluster and the user's kubeconfig entry
+        run: |
+          ./scripts/cluster-down.sh
+          if sudo podman ps -a --format '{{.Names}}' | grep -q lessons; then echo "nodes still exist"; exit 1; fi
+          if kubectl config get-contexts -o name | grep -qx kind-lessons; then echo "context still there"; exit 1; fi
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo podman ps -a || true
+          sudo podman logs --tail 60 lessons-control-plane || true
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl -n kube-system logs ds/kube-proxy --tail=30 || true
+          kubectl -n kube-system logs ds/kindnet --tail=50 || true

@@ -154,7 +154,7 @@ Besides the tools, the checker inspects **how Docker is set up**, because that's
 | **Proxy settings** | With a company proxy, `NO_PROXY` must list `localhost,127.0.0.1` or `kubectl` can't reach your own cluster |
 | **Podman instead of Docker** | kind must be told to use Podman explicitly (the scripts do that) |
 | **Rootless mode** | About ten extra host settings (delegation, sub-UIDs, storage, kernel modules, lingering...). See [rootless.md](rootless.md) |
-| **`sudo`** | Running the scripts with sudo puts the cluster where your own user can't see it |
+| **`sudo`** | Running the scripts with sudo puts the cluster where your own user can't see it. Want root's engine? Use `ENGINE_SUDO=1` instead ([rootful.md](rootful.md)) |
 
 Every problem it finds comes with the exact command to fix it. `cluster-up` runs the same checks
 first and stops with that advice, instead of failing halfway through with a kind stack trace.
@@ -208,6 +208,7 @@ These are real issues people hit on corporate laptops:
 | `port is already allocated` on 8080 | Something else uses port 8080 | Change `hostPort: 8080` in `platform/kind-config.yaml` to e.g. `8081` and use that port wherever lessons say `8080` |
 | `toomanyrequests: You have reached your unauthenticated pull rate limit` | Docker Hub limits anonymous pulls per IP, and an office shares one IP | Wait (the limit resets within hours), `docker login` with a free Docker Hub account for pulls on your machine, or ask whether your company has a registry mirror. Pods show this as `ImagePullBackOff` |
 | `kind create cluster` fails with an error mentioning **rootless**, `Delegate=yes`, sub-UIDs or `could not find a log line` | Rootless Docker/Podman without the host settings kind needs | Run `check-prereqs`: it says exactly what's missing. Every known case is in [rootless.md](rootless.md) |
+| Rootless keeps failing, but you have `sudo` | Rootless needs host settings you can't get | Root's engine through sudo: `export ENGINE_SUDO=1`, then run the scripts as yourself. See [rootful.md](rootful.md), and ask before doing it on a company machine |
 | `running kind with rootless provider requires cgroup v2` | Rootless Docker/Podman on a cgroup v1 host (typically RHEL 8) | See [rootless.md](rootless.md), "RHEL 8" |
 | `kubectl` says `connection refused` after a reboot | The node containers are stopped (Podman never restarts them) | Run `cluster-up` again: it starts them |
 | `kubectl` fails with a proxy error or `Forbidden` on a local cluster | `HTTPS_PROXY` is set and `NO_PROXY` doesn't include `localhost,127.0.0.1` | Add them to `NO_PROXY` (`check-prereqs` shows the command) |
@@ -251,7 +252,8 @@ What the scripts take care of for you:
 Three rules that save the most time:
 
 1. **Never run the scripts with `sudo`.** That creates the cluster in root's engine with root's
-   kubeconfig, and your own user then sees nothing.
+   kubeconfig, and your own user then sees nothing. If you *want* root's engine, set
+   `ENGINE_SUDO=1` and run them as yourself (see "Rootful mode" below).
 2. **After changing a systemd setting (cgroup delegation), reboot.** "Log out and in again" isn't
    enough while any other session (SSH, VS Code remote, tmux) is still open.
 3. **Run `loginctl enable-linger`**, or the whole cluster stops when you log out.
@@ -260,11 +262,22 @@ Three rules that save the most time:
 of them, each marked with whether the scripts catch it. It also says plainly when rootless isn't
 worth the fight (RHEL 8 in particular) and what to use instead.
 
+#### Rootful mode: when rootless won't work and you have sudo
+
+With `export ENGINE_SUDO=1` the scripts run Podman (or Docker) **and kind as root through
+`sudo`**, then copy the cluster's entry into *your* kubeconfig. `kubectl`, `helm` and the lessons
+run as you, without sudo. That removes most of the rootless problems (sub-UIDs, delegation,
+NFS homes, kernel modules, lingering). The cost is security: the kind nodes become privileged
+containers running as root, so check your company's policy first.
+
+**[Step-by-step guide: rootful.md](rootful.md)**: when to use it, the setup, what needs
+`sudo` afterwards (`sudo podman ps` instead of `docker ps`), and its own troubleshooting table.
+
 **On your own machine, normal ("rootful") Docker is simpler.** To switch back from rootless
 Docker: `dockerd-rootless-setuptool.sh uninstall`, install Docker as in step 1 above, then
 `docker context use default`.
 
-The course's CI runs on ordinary Docker and on rootless Podman (Ubuntu). kind's Podman support
+The course's CI runs on ordinary Docker, on rootless Podman, and on root's Podman through sudo (all Ubuntu). kind's Podman support
 is labelled *experimental* by kind itself.
 
 ### Corporate proxy: trusting a custom root CA inside kind nodes
