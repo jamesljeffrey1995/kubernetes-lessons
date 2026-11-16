@@ -74,6 +74,7 @@ while writing this course.
 | 13 | `requires setting systemd property "Delegate=yes"` | The `cpu`, `memory` or `pids` controller isn't delegated to your user (systemd older than 252) | Create `delegate.conf` (commands in the `✘ delegate` output), then **reboot or log out of every session** | ✘ delegate, hint | kind |
 | 14 | Same error, although `delegate.conf` exists | Your user's systemd instance is still the old one. It only restarts when your *last* session ends: an open SSH session, VS Code remote or `tmux` keeps it alive | Reboot. Check with `cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers` (must list `cpu memory pids`) | ✘ delegate | vendor |
 | 15 | Same error, although the file above lists the controllers | kind was started from a login session, whose own cgroup doesn't have them | Start kind with `systemd-run --scope --user -p "Delegate=yes" ...`. `cluster-up` does this | handled | kind |
+| 15b | `cpu` stays missing although `delegate.conf` exists **and** you rebooted. Typical on RHEL 8 | The kernel refuses: on cgroup v2 in older kernels the `cpu` controller can't be enabled while any **realtime** process runs outside the root cgroup, and RHEL services such as `multipathd` run realtime | Not fixable by you. IT has to decide (see "RHEL 8" below). `check-prereqs` lists the processes responsible | ✘ delegate | kernel docs |
 | 16 | `Failed to connect to bus: No medium found` | No systemd user session: you became this user with `su` or `sudo -u` | Log in directly (new SSH/desktop login). `cluster-up` restores `XDG_RUNTIME_DIR` when it can and otherwise runs kind without a scope | ! session, hint | vendor |
 | 17 | `could not find a log line that matches "Reached target .*Multi-User System.*"` | (a) Rootless Podman's log relay misses the boot message, or (b) the node really failed to boot, most often because inotify limits are too low for three nodes | (a) `log_driver = "k8s-file"` under `[containers]` in `~/.config/containers/containers.conf`; (b) raise `fs.inotify.max_user_instances` to 512 and `max_user_watches` to 524288 | hint, · inotify | kind |
 | 18 | `/dev/fuse: no such file or directory` | kind gives every rootless node `/dev/fuse`; the `fuse` module isn't loaded | `sudo modprobe fuse` | ✘ fuse, hint | kind |
@@ -107,22 +108,48 @@ while writing this course.
 
 ## RHEL 8
 
-RHEL 8 stacks four separate problems, and it's worth knowing that before you start:
+RHEL 8 stacks several separate problems, and it's worth knowing that before you start:
 
 1. **cgroup v1 by default.** Kubernetes 1.37 needs v2. Switching is a kernel boot parameter and a
    reboot, and it changes behaviour for everything else on the machine. Ask IT first.
 2. **systemd 239** doesn't delegate controllers to users by default (that came with 252), so you
-   need `delegate.conf` and a full logout. It also can't delegate `cpuset` in older minor
-   releases. That one is fine: kind only requires `cpu`, `memory` and `pids`, and the checker
-   only fails on those three.
-3. **Kernel 4.18.** Kubernetes documents kernel 5.8 as the minimum for cgroup v2. Red Hat
+   need `delegate.conf` and a reboot. It also can't delegate `cpuset` in older minor releases.
+   That one is fine: kind only requires `cpu`, `memory` and `pids`, and the checker only fails on those three.
+3. **The kernel may refuse `cpu` anyway.** Kernel 4.18's cgroup v2 documentation says: *"the cpu
+   controller can only be enabled when all RT processes are in the root cgroup"*. RHEL runs some
+   services with realtime priority (`multipathd`, for storage multipathing, is the usual one), and
+   systemd places them in `system.slice`, not the root. Then `cpu` can't be enabled anywhere,
+   `delegate.conf` has no effect, and kind refuses with the `Delegate=yes` error however often you
+   reboot. `check-prereqs` detects this and names the processes.
+4. **Kernel 4.18.** Kubernetes documents kernel 5.8 as the minimum for cgroup v2. Red Hat
    backports a great deal, so it may work, but nobody tests current Kubernetes on it, and this
    course doesn't either. `check-prereqs` warns rather than fails.
-4. **Rootless Podman**, which kind calls experimental.
+5. **Kernel modules** (`ip_tables` and friends) can only be loaded by root.
+6. **Rootless Podman**, which kind calls experimental.
 
-If the machine can't be changed or it still fails after the checker is green, stop fighting it.
-The time is better spent on a VM: any hypervisor or cloud instance running RHEL 9, Rocky 9 or
-Ubuntu 22.04+ with 4 CPUs and 8 GB runs this course without any of the above.
+Points 3 and 5 can only be changed by whoever administers the machine. Whether point 3 is safe
+to change depends on why that service runs realtime (for `multipathd`: whether the machine uses
+multipath storage at all), which is exactly the kind of question an admin should answer, not a course.
+
+### What to ask IT for
+
+Paste the output of `./scripts/check-prereqs.sh` together with something like:
+
+> I need to run a local Kubernetes test cluster (kind, with rootless Podman) on this machine for
+> training. It needs three changes, all standard for rootless containers on RHEL:
+>
+> 1. Load these kernel modules at boot: `ip_tables ip6_tables iptable_nat ip6table_nat`
+>    (`/etc/modules-load.d/iptables.conf`).
+> 2. Delegate cgroup controllers to users: `/etc/systemd/system/user@.service.d/delegate.conf`
+>    with `[Service]` and `Delegate=cpu cpuset io memory pids`.
+> 3. Make the cgroup v2 `cpu` controller available. On this kernel it can't be enabled while the
+>    realtime processes listed in the attached output run outside the root cgroup. Could you check
+>    whether those services need realtime scheduling on this machine?
+>
+> If that's not acceptable on this machine, a RHEL 9 VM (4 CPUs, 8 GB RAM) would work instead.
+
+The last line matters: it gives IT an easy yes. RHEL 9 has none of the problems above except the
+modules, and its systemd delegates by default.
 
 ## Getting more information out of a failure
 
