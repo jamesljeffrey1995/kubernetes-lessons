@@ -40,6 +40,11 @@ spec:
           labelSelector:
             matchLabels:
               {{- include "pulse.selectorLabels" . | nindent 14 }}
+      {{- with .Values.imagePullSecrets }}
+      # Needed only for a private registry. deploy.sh creates the Secret when PULSE_REGISTRY_USER is set.
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: pulse
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"

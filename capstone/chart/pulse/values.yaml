@@ -2,9 +2,12 @@
 replicaCount: 3                  # ignored when autoscaling.enabled=true (the HPA owns it)
 
 image:
-  repository: pulse
+  repository: pulse              # local images loaded into kind. deploy.sh sets PULSE_IMAGE here for a registry
   tag: ""                        # defaults to the chart's appVersion
   pullPolicy: IfNotPresent
+
+# Names of Secrets (type kubernetes.io/dockerconfigjson) in the release namespace, for a private registry.
+imagePullSecrets: []
 
 app:
   color: "#2563eb"               # tile colour on the dashboard
