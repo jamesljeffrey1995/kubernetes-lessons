@@ -13,6 +13,7 @@ Each one is a separate way to fail. Pick the easiest option you're actually allo
 |---|---|
 | Your own Linux machine | Ordinary ("rootful") Docker Engine. None of this page applies |
 | Windows or macOS | Docker Desktop, Rancher Desktop, or Podman Desktop with a **rootful** machine (`podman machine set --rootful`) |
+| Work machine, rootless keeps failing, **you have sudo** and policy allows root containers | Root's Podman through sudo (`ENGINE_SUDO=1`). See [rootful.md](rootful.md) |
 | Work machine, you can get a VM or cloud instance | A small Ubuntu 22.04+/RHEL 9+ VM with rootful Docker (4 CPU, 8 GB) |
 | Work machine, RHEL 9 / Fedora, rootless Podman required | Works. Follow "The short path" below |
 | Work machine, **RHEL 8**, rootless Podman required | The hard case. Read "RHEL 8" at the bottom before spending time on it |
@@ -55,7 +56,7 @@ while writing this course.
 | # | Symptom | Cause | Fix | Caught by | Source |
 |---|---|---|---|---|---|
 | 1 | `docker: command not found` | RHEL ships Podman only | Nothing: the scripts use `podman`. Where a lesson says `docker`, type `podman` (or `sudo dnf install podman-docker`) | handled | kind |
-| 2 | Cluster "disappears", `kubectl` shows nothing, or permission errors in `~/.kube` | A script was run with `sudo`: the cluster lives in root's Podman, the kubeconfig in `/root` | `sudo kind delete cluster --name lessons`, `sudo chown -R "$USER" ~/.kube`, then run as yourself | ✘ sudo | kind |
+| 2 | Cluster "disappears", `kubectl` shows nothing, or permission errors in `~/.kube` | A script was run with `sudo`: the cluster lives in root's Podman, the kubeconfig in `/root` | `sudo env KIND_EXPERIMENTAL_PROVIDER=podman "$(command -v kind)" delete cluster --name lessons`, `sudo chown -R "$USER" ~/.kube`, then run as yourself. Want root's engine on purpose? `ENGINE_SUDO=1` ([rootful.md](rootful.md)) | ✘ sudo | kind |
 | 3 | `cannot clone: Invalid argument`, `user namespaces are not enabled` | `user.max_user_namespaces=0`, a common security-hardening (CIS/STIG) setting | Admin: `echo 'user.max_user_namespaces=28633' \| sudo tee /etc/sysctl.d/99-userns.conf && sudo sysctl --system` | ✘ engine | vendor |
 | 4 | `newuidmap: not found`, or `potentially insufficient UIDs or GIDs available in user namespace ... lchown: invalid argument` while pulling the node image | No sub-UID range for your account. **Normal for LDAP / Active Directory accounts**, which `useradd` never touched | Add a range to `/etc/subuid` and `/etc/subgid` (commands in the `✘ subuid` output), then `podman system migrate` | ✘ subuid, hint | vendor |
 | 5 | Pulls fail with `lchown ... operation not permitted`, or storage errors mentioning NFS | Home directory on NFS/CIFS/GPFS. Rootless image storage can't live on a network filesystem | Point `graphroot` in `~/.config/containers/storage.conf` at a local disk, then `podman system reset` | ✘ storage | vendor |
@@ -126,6 +127,11 @@ RHEL 8 stacks several separate problems, and it's worth knowing that before you 
    course doesn't either. `check-prereqs` warns rather than fails.
 5. **Kernel modules** (`ip_tables` and friends) can only be loaded by root.
 6. **Rootless Podman**, which kind calls experimental.
+
+**Does rootful mode ([rootful.md](rootful.md)) help on RHEL 8?** It removes points 2, 5 and 6.
+It doesn't remove point 1: Kubernetes needs cgroup v2 either way. It probably doesn't remove
+point 3, because a `cpu` controller the kernel won't enable at the top of the tree is missing for
+root's containers too. That last part is untested.
 
 Points 3 and 5 can only be changed by whoever administers the machine. Whether point 3 is safe
 to change depends on why that service runs realtime (for `multipathd`: whether the machine uses
