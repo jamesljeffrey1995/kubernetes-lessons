@@ -56,10 +56,24 @@ Each coloured tile is a Pod. The big panel shows which Pod answered the latest r
 "failed" counter is the number to watch in every step that follows.
 
 Why `kind load`? kind's nodes are containers with their own image store; they can't see images
-you built on your machine. On a real cluster you'd push to a registry (ECR, ACR, GHCR, Harbor)
-instead, and the chart's `image.repository` would point there.
+you built on your machine. That's the default. To pull Pulse from a registry instead, choose it
+with `PULSE_IMAGE`. The same variable works for both scripts, so you set it once for build and deploy:
 
-The script saves each image to a tar file and uses `kind load image-archive`, not the better-known
+```bash
+# Public registry (e.g. GitHub Container Registry). Log in first: docker login ghcr.io
+PULSE_IMAGE=ghcr.io/you/pulse ./capstone/scripts/build.sh     # builds, then pushes pulse:v1 and pulse:v2
+PULSE_IMAGE=ghcr.io/you/pulse ./capstone/scripts/deploy.sh    # the cluster pulls from there
+
+# Private registry: also give the cluster a pull secret. The token comes from your environment,
+# and is never written to the repo. For GHCR, use a personal access token with read:packages.
+PULSE_IMAGE=ghcr.io/you/pulse PULSE_REGISTRY_USER=you PULSE_REGISTRY_TOKEN="$GHCR_TOKEN" ./capstone/scripts/deploy.sh
+```
+
+PowerShell: `$env:PULSE_IMAGE = "ghcr.io/you/pulse"` (and `PULSE_REGISTRY_USER` / `PULSE_REGISTRY_TOKEN`)
+before running `build.ps1` and `deploy.ps1`.
+
+Without `PULSE_IMAGE`, the chart pulls the `pulse` images that `build.sh` loaded into kind. The
+script saves each image to a tar file and uses `kind load image-archive`, not the better-known
 `kind load docker-image`. The latter always calls the `docker` program, so it fails with Podman,
 and Podman would name the image `localhost/pulse`, which Kubernetes never looks for.
 
@@ -195,7 +209,7 @@ browser zoom so the tiles are visible from the back of the room, and close other
 
 ## 6. Make it yours (ideas that also make great portfolio pieces)
 
-1. **Push to a registry** (GitHub Container Registry is free) and change `image.repository`.
+1. **Push to a registry** (GitHub Container Registry is free) with `PULSE_IMAGE`, as shown above.
 2. **Add Prometheus + Grafana** (`kube-prometheus-stack` Helm chart), scrape `/metrics`, and graph
    request rate and errors during a rolling update.
 3. **GitOps**: install Argo CD, point it at this repo's chart, and deploy by merging pull requests.
